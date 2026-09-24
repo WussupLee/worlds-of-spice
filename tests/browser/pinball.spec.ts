@@ -249,15 +249,45 @@ test("mechanism output is audible with score and wind turned down", async ({
     window.AudioContext = class extends Original {
       createDynamicsCompressor() {
         const node = super.createDynamicsCompressor();
-        const meter = this.createAnalyser();
-        meter.fftSize = 2048;
-        node.connect(meter);
-        (window as unknown as { __meter: AnalyserNode }).__meter = meter;
+        const w = window as unknown as {
+          __audioPeak: number;
+          __meterReady: boolean;
+        };
+        w.__audioPeak = 0;
+        // Meter on the audio thread: a 20 ms impact must not be missed simply
+        // because a software-rendered WebGL frame takes longer than the sound.
+        const source = `class PeakMeter extends AudioWorkletProcessor {
+          constructor(){super();this.peak=0;this.frames=0;}
+          process(inputs){
+            for(const channel of inputs[0]||[]) for(const value of channel) this.peak=Math.max(this.peak,Math.abs(value));
+            if(++this.frames%32===0){this.port.postMessage(this.peak);this.peak=0;}
+            return true;
+          }
+        } registerProcessor("pinball-test-meter",PeakMeter);`;
+        const url = URL.createObjectURL(
+          new Blob([source], { type: "text/javascript" }),
+        );
+        void this.audioWorklet.addModule(url).then(() => {
+          const meter = new AudioWorkletNode(this, "pinball-test-meter");
+          meter.port.onmessage = (event) => {
+            w.__audioPeak = Math.max(w.__audioPeak, Number(event.data));
+          };
+          node.connect(meter).connect(this.destination); // Its output is silent.
+          w.__meterReady = true;
+          URL.revokeObjectURL(url);
+        });
         return node;
       }
     };
   });
   await start(page);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { __meterReady: boolean }).__meterReady,
+      ),
+    )
+    .toBe(true);
   await page
     .getByRole("button", { name: "Audio and display settings" })
     .click();
@@ -266,22 +296,16 @@ test("mechanism output is audible with score and wind turned down", async ({
     await page.keyboard.press("Home");
   }
   await page.getByRole("button", { name: "Close dialog" }).click();
-  const [peak] = await Promise.all([
-    page.evaluate(async () => {
-      const meter = (window as unknown as { __meter: AnalyserNode }).__meter;
-      const samples = new Float32Array(meter.fftSize);
-      let peak = 0;
-      for (let i = 0; i < 25; i++) {
-        await new Promise(requestAnimationFrame);
-        meter.getFloatTimeDomainData(samples);
-        for (const value of samples) peak = Math.max(peak, Math.abs(value));
-      }
-      return peak;
-    }),
-    page.keyboard.press("ArrowLeft", { delay: 100 }),
-  ]);
-  expect(peak).toBeGreaterThan(0.015);
-  expect(peak).toBeLessThan(0.98);
+  await page.evaluate(() => {
+    (window as unknown as { __audioPeak: number }).__audioPeak = 0;
+  });
+  await page.keyboard.press("ArrowLeft", { delay: 100 });
+  const peak = () =>
+    page.evaluate(
+      () => (window as unknown as { __audioPeak: number }).__audioPeak,
+    );
+  await expect.poll(peak).toBeGreaterThan(0.015);
+  expect(await peak()).toBeLessThan(0.98);
 });
 
 test("all three mixer settings remain adjustable and persist after reload", async ({
@@ -392,7 +416,9 @@ test("a full three-ball game ends, records the score, and restarts cleanly", asy
         .isEnabled()
     )
       await page.keyboard.press("Space");
-    await page.clock.runFor(1000);
+    // Exercise real 240 Hz physics through the production RAF callback without
+    // asking a CPU-only CI GPU to rasterize 60 redundant images per second.
+    for (let frame = 0; frame < 4; frame++) await page.clock.fastForward(250);
     if (
       (await page.locator("canvas").getAttribute("data-phase")) === "gameover"
     ) {
