@@ -289,9 +289,14 @@ test("real mechanism samples are quiet, reverberant and audible without music", 
         const node = super.createBufferSource();
         const start = node.start.bind(node);
         node.start = (when = 0, offset = 0, duration?: number) => {
-          const w = window as unknown as { __recordedDurations?: number[] };
-          if (!node.loop && node.buffer)
+          const w = window as unknown as {
+            __recordedDurations?: number[];
+            __recordedAt?: number;
+          };
+          if (!node.loop && node.buffer) {
             (w.__recordedDurations ??= []).push(node.buffer.duration);
+            w.__recordedAt = Math.max(this.currentTime, when);
+          }
           start(when, offset, duration);
         };
         return node;
@@ -325,41 +330,60 @@ test("real mechanism samples are quiet, reverberant and audible without music", 
   await page.getByRole("button", { name: "Close dialog" }).click();
   // Flush music/wind from the analyser history before measuring mechanisms.
   await page.waitForTimeout(900);
-  await page.keyboard.press("ArrowLeft", { delay: 100 });
-  const peak = () =>
-    page.evaluate(() => {
-      const analyser = (
-        window as unknown as { __mechanismAnalyser: AnalyserNode }
-      ).__mechanismAnalyser;
-      const samples = new Float32Array(analyser.fftSize);
-      analyser.getFloatTimeDomainData(samples);
-      return samples.reduce(
-        (maximum, value) => Math.max(maximum, Math.abs(value)),
-        0,
-      );
-    });
-  let measuredPeak = 0;
-  await expect
-    .poll(async () => (measuredPeak = Math.max(measuredPeak, await peak())))
-    .toBeGreaterThan(0.001);
-  expect(measuredPeak).toBeLessThan(0.15);
-  const actual = await page.evaluate(() => {
+  // Trigger the normal input handler and capture the actual output in one
+  // browser task. Cross-process assertions on a software GPU can otherwise
+  // consume the entire reverb decay before the tail measurement even starts.
+  const actual = await page.evaluate(async () => {
     const w = window as unknown as {
       __cabinetReverb: ConvolverNode;
       __recordedDurations: number[];
+      __mechanismAnalyser: AnalyserNode;
+      __recordedAt?: number;
     };
+    const analyser = w.__mechanismAnalyser;
+    const samples = new Float32Array(analyser.fftSize);
+    const started = analyser.context.currentTime;
+    let peak = 0,
+      tail = 0,
+      tailWindows = 0;
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "ArrowLeft" }));
+    try {
+      while (analyser.context.currentTime - started < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        analyser.getFloatTimeDomainData(samples);
+        const level = samples.reduce(
+          (max, value) => Math.max(max, Math.abs(value)),
+          0,
+        );
+        const elapsed =
+          analyser.context.currentTime - (w.__recordedAt ?? started);
+        peak = Math.max(peak, level);
+        // At >1.2 s the entire ~0.7 s analyser window is beyond the
+        // 220 ms source recording. Holding avoids a second release sound.
+        if (elapsed > 1.2 && elapsed < 2.4) {
+          tail = Math.max(tail, level);
+          tailWindows++;
+        }
+      }
+    } finally {
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "ArrowLeft" }));
+    }
     return {
       reverb: w.__cabinetReverb.buffer!.duration,
       samples: w.__recordedDurations,
+      peak,
+      tail,
+      tailWindows,
     };
   });
+  expect(actual.peak).toBeGreaterThan(0.001);
+  expect(actual.peak).toBeLessThan(0.15);
   expect(actual.reverb).toBeCloseTo(3.4, 2);
   expect(
     actual.samples.some((duration) => Math.abs(duration - 0.22) < 0.01),
   ).toBe(true);
-  // The recorded flipper is only 220 ms; later output must be its room tail.
-  await page.waitForTimeout(1600);
-  expect(await peak()).toBeGreaterThan(0.00001);
+  expect(actual.tailWindows).toBeGreaterThan(0);
+  expect(actual.tail).toBeGreaterThan(0.00001);
 });
 
 test("all three mixer settings remain adjustable and persist after reload", async ({
