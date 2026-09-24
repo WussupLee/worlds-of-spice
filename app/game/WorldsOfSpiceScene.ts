@@ -40,6 +40,10 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
   private glowGraphics?: Phaser.GameObjects.Graphics;
   private keys?: Record<string, Phaser.Input.Keyboard.Key>;
   private audio?: AudioContext;
+  private music?: HTMLAudioElement;
+  private sandGain?: GainNode;
+  private sandSources: Array<AudioBufferSourceNode | OscillatorNode> = [];
+  private lastRailSound = 0;
   private lastPublished = "";
   private modeTimer?: Phaser.Time.TimerEvent;
   private modeHits = 0;
@@ -217,12 +221,18 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.ballStartedAt = this.time.now;
     this.message = "Follow the illuminated shot";
     this.sfx(180, 0.12, "square");
+    this.impact(180, 0.024, 0.12);
     this.publish(true);
   }
 
   setFlipper(side: "left" | "right", active: boolean) {
+    const wasActive = side === "left" ? this.leftPressed : this.rightPressed;
     if (side === "left") this.leftPressed = active;
     else this.rightPressed = active;
+    if (active && !wasActive) {
+      this.ensureAudio();
+      this.sfx(side === "left" ? 96 : 104, 0.025, "square", 0.018);
+    }
     if (active && [...this.activeBalls].some((candidate) => !candidate.getData("launched"))) {
       this.prescienceIndex = side === "right"
         ? (this.prescienceIndex + 1) % SHOT_ORDER.length
@@ -253,6 +263,12 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.pausedByUser = !this.pausedByUser;
     this.phase = this.pausedByUser ? "paused" : "playing";
     this.matter.world.enabled = !this.pausedByUser;
+    if (this.pausedByUser) {
+      this.music?.pause();
+      this.audio?.suspend().catch(() => undefined);
+    } else {
+      this.ensureAudio();
+    }
     this.message = this.pausedByUser ? "PAUSED" : "The sands are moving";
     this.publish(true);
   }
@@ -271,11 +287,14 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
         ball.applyForce(away);
         this.flash(ball.x, ball.y, 0xffbe57);
         this.sfx(330 + Number(other.at(-1)) * 90, 0.055, "square");
+        this.impact(1150, 0.022);
       } else if (other.startsWith("sling:")) {
         this.addScore(SCORE.sling);
         const velocity = (ball.body as MatterBody).velocity;
         ball.setVelocity(velocity.x + (ball.x < W / 2 ? 8 : -8), Math.min(-14, velocity.y - 7));
         this.flash(ball.x, ball.y, 0xff7340);
+        this.sfx(210, 0.045, "sawtooth", 0.026);
+        this.impact(760, 0.018);
       } else if (other.startsWith("shot:")) {
         this.hitShot(other.slice(5) as ShotId, ball);
       } else if (other.startsWith("flipper:") && this.tilt < 100) {
@@ -285,9 +304,17 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
           const velocity = (ball.body as MatterBody).velocity;
           ball.setVelocity(velocity.x + horizontal, Math.min(-22, velocity.y - 15));
           this.sfx(115, 0.035, "square");
+          this.impact(420, 0.014);
         }
       } else if (other === "drain") {
         this.handleDrain(ball);
+      } else if (other === "rail" && this.time.now - this.lastRailSound > 85) {
+        const velocity = (ball.body as MatterBody).velocity;
+        const speed = Math.hypot(velocity.x, velocity.y);
+        if (speed > 5) {
+          this.lastRailSound = this.time.now;
+          this.impact(520 + Math.min(900, speed * 24), Math.min(0.014, 0.004 + speed * 0.00035));
+        }
       }
     }
   }
@@ -345,6 +372,8 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.modeProgress = 0;
     this.modeHits = 0;
     this.message = MODE_LABELS[next].toUpperCase();
+    this.sfx(196, 0.18, "triangle", 0.025);
+    this.time.delayedCall(110, () => this.sfx(294, 0.22, "triangle", 0.022));
     this.modeTimer?.remove(false);
     this.modeTimer = this.time.delayedCall(30_000, () => {
       if (this.currentMode === next) {
@@ -364,6 +393,7 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.message = `${MODE_LABELS[mode].toUpperCase()} COMPLETE`;
     this.modeTimer?.remove(false);
     this.flash(450, 780, 0xffd36b, 2.4);
+    [330, 440, 660].forEach((frequency, index) => this.time.delayedCall(index * 85, () => this.sfx(frequency, 0.16, "triangle", 0.026)));
   }
 
   private startMultiball() {
@@ -371,6 +401,8 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.currentMode = "multiball";
     this.message = "WYRM AWAKENING · MULTIBALL";
     this.addScore(SCORE.superJackpot);
+    this.sfx(58, 0.6, "sawtooth", 0.032);
+    this.impact(120, 0.03, 0.32);
     this.spawnBall(420, 520, true);
     this.spawnBall(480, 520, true);
     this.time.delayedCall(28_000, () => {
@@ -386,6 +418,7 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     this.currentMode = "wizard";
     this.modeProgress = 0;
     this.message = "DOMINION ASCENDANT";
+    [147, 220, 330, 440].forEach((frequency, index) => this.time.delayedCall(index * 105, () => this.sfx(frequency, 0.32, "triangle", 0.025)));
     this.spawnBall(420, 540, true);
     this.spawnBall(480, 540, true);
     this.time.delayedCall(35_000, () => {
@@ -402,6 +435,7 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     if (!ball.active) return;
     this.activeBalls.delete(ball);
     ball.destroy();
+    this.sfx(105, 0.24, "sine", 0.022);
     if (this.activeBalls.size > 0) {
       if (this.activeBalls.size === 1 && this.currentMode === "multiball") {
         this.currentMode = null;
@@ -412,6 +446,7 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     const saveWindow = ballSaveDuration(this.strategy);
     if (this.time.now - this.ballStartedAt <= saveWindow) {
       this.message = "BALL SAVED";
+      this.time.delayedCall(90, () => this.sfx(420, 0.18, "triangle", 0.025));
       this.time.delayedCall(650, () => this.spawnBall());
       this.publish(true);
       return;
@@ -442,12 +477,90 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
   }
 
   private ensureAudio() {
-    if (!this.settings.audio || this.audio) return;
-    const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (AudioCtor) this.audio = new AudioCtor();
+    if (!this.settings.audio && !this.settings.music && !this.settings.ambience) return;
+    if (!this.audio) {
+      const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (AudioCtor) this.audio = new AudioCtor();
+    }
+    this.audio?.resume().catch(() => undefined);
+    this.startMusic();
+    this.startSandAmbience();
   }
 
-  private sfx(frequency: number, duration: number, type: OscillatorType) {
+  private startMusic() {
+    if (!this.settings.music) return;
+    if (!this.music) {
+      this.music = new Audio("./audio/desert-theme.mp3");
+      this.music.loop = true;
+      this.music.preload = "auto";
+      this.music.volume = 0.11;
+    }
+    if (!this.pausedByUser) this.music.play().catch(() => undefined);
+  }
+
+  private startSandAmbience() {
+    if (!this.settings.ambience || !this.audio || this.sandGain) return;
+    const context = this.audio;
+    const buffer = context.createBuffer(1, context.sampleRate * 4, context.sampleRate);
+    const data = buffer.getChannelData(0);
+    let brown = 0;
+    for (let i = 0; i < data.length; i += 1) {
+      brown = brown * 0.985 + (Math.random() * 2 - 1) * 0.08;
+      data[i] = brown;
+    }
+
+    const master = context.createGain();
+    master.gain.value = 0.014;
+    master.connect(context.destination);
+    this.sandGain = master;
+
+    const makeLayer = (frequency: number, gainValue: number, type: BiquadFilterType) => {
+      const source = context.createBufferSource();
+      const filter = context.createBiquadFilter();
+      const gain = context.createGain();
+      source.buffer = buffer;
+      source.loop = true;
+      filter.type = type;
+      filter.frequency.value = frequency;
+      filter.Q.value = 0.45;
+      gain.gain.value = gainValue;
+      source.connect(filter).connect(gain).connect(master);
+      source.start();
+      this.sandSources.push(source);
+    };
+    makeLayer(820, 0.72, "bandpass");
+    makeLayer(165, 0.42, "lowpass");
+
+    const gust = context.createOscillator();
+    const gustDepth = context.createGain();
+    gust.frequency.value = 0.07;
+    gustDepth.gain.value = 0.0045;
+    gust.connect(gustDepth).connect(master.gain);
+    gust.start();
+    this.sandSources.push(gust);
+  }
+
+  private impact(frequency: number, volume: number, duration = 0.055) {
+    if (!this.settings.audio) return;
+    this.ensureAudio();
+    if (!this.audio) return;
+    const frameCount = Math.max(1, Math.floor(this.audio.sampleRate * duration));
+    const buffer = this.audio.createBuffer(1, frameCount, this.audio.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frameCount; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / frameCount);
+    const source = this.audio.createBufferSource();
+    const filter = this.audio.createBiquadFilter();
+    const gain = this.audio.createGain();
+    filter.type = "bandpass";
+    filter.frequency.value = frequency;
+    filter.Q.value = 0.8;
+    gain.gain.value = volume;
+    source.buffer = buffer;
+    source.connect(filter).connect(gain).connect(this.audio.destination);
+    source.start();
+  }
+
+  private sfx(frequency: number, duration: number, type: OscillatorType, volume = 0.035) {
     if (!this.settings.audio) return;
     this.ensureAudio();
     if (!this.audio) return;
@@ -456,7 +569,7 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     osc.type = type;
     osc.frequency.setValueAtTime(frequency, this.audio.currentTime);
     osc.frequency.exponentialRampToValueAtTime(Math.max(45, frequency * 0.55), this.audio.currentTime + duration);
-    gain.gain.setValueAtTime(0.035, this.audio.currentTime);
+    gain.gain.setValueAtTime(volume, this.audio.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.0001, this.audio.currentTime + duration);
     osc.connect(gain).connect(this.audio.destination);
     osc.start();
@@ -492,6 +605,12 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
     if (this.phase !== "playing") return;
     const keyboardLeft = Boolean(this.keys?.left.isDown || this.keys?.a.isDown);
     const keyboardRight = Boolean(this.keys?.right.isDown || this.keys?.d.isDown);
+    if (this.keys && (Phaser.Input.Keyboard.JustDown(this.keys.left) || Phaser.Input.Keyboard.JustDown(this.keys.a))) {
+      this.sfx(96, 0.025, "square", 0.018);
+    }
+    if (this.keys && (Phaser.Input.Keyboard.JustDown(this.keys.right) || Phaser.Input.Keyboard.JustDown(this.keys.d))) {
+      this.sfx(104, 0.025, "square", 0.018);
+    }
     const left = this.leftPressed || keyboardLeft;
     const right = this.rightPressed || keyboardRight;
     const step = Math.min(1, delta / 65);
@@ -535,6 +654,12 @@ export class WorldsOfSpiceScene extends Phaser.Scene {
 
   shutdown() {
     this.matter.world.off("collisionstart", this.onCollision, this);
+    this.music?.pause();
+    this.music = undefined;
+    this.sandSources.forEach((source) => {
+      try { source.stop(); } catch { /* already stopped */ }
+    });
+    this.sandSources = [];
     this.audio?.close();
   }
 }

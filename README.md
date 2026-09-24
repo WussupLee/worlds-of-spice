@@ -29,10 +29,15 @@ pnpm build
 
 - Vinext, React, and TypeScript
 - Phaser 3 with Matter physics
-- Procedural Web Audio and optional touch haptics
+- Layered procedural cabinet, ball, target, flipper, wind, and shifting-sand audio
+- CC0 desert score with independent music, ambience, and effects controls
 - Local high scores and settings
 - Installable offline web app
 
 ## Research influences
 
 The rule structure draws on the readable objectives and tactile mechanisms of Indiana Jones: The Pinball Adventure, the user-directed shot multiplier of Stern Star Wars, the journey structure of Jurassic Park, and the cinematic centerpiece mechanisms of Godzilla and Jaws. No table assets or rules were copied.
+
+## Audio credit
+
+“Desert Theme” by Tarush Singhal is used as the low-volume ambient score. It is dedicated to the public domain under CC0 and was downloaded from [OpenGameArt](https://opengameart.org/content/desert-theme-0). Attribution is optional under CC0, but included here with thanks. All pinball mechanisms and shifting-sand ambience are synthesized in the browser.

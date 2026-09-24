@@ -21,6 +21,8 @@ export interface GameSnapshot {
 
 export interface GameSettings {
   audio: boolean;
+  music: boolean;
+  ambience: boolean;
   haptics: boolean;
   reducedMotion: boolean;
   ballTrail: boolean;

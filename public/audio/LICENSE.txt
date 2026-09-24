@@ -1,0 +1,10 @@
+DESERT SCORE
+
+Title: Desert Theme
+Creator: Tarush Singhal
+Source: https://opengameart.org/content/desert-theme-0
+File: desertvibes.mp3 (renamed desert-theme.mp3)
+License: CC0 1.0 Universal / Public Domain Dedication
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+
+Pinball mechanisms, wind, and shifting-sand ambience are synthesized at runtime.

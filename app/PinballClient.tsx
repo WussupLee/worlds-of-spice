@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MODE_LABELS, STRATEGY_LABELS, type GameBridge, type GameSettings, type GameSnapshot, type HighScoreEntry, type StrategyId } from "./game/types";
 
-const DEFAULT_SETTINGS: GameSettings = { audio: true, haptics: true, reducedMotion: false, ballTrail: true };
+const DEFAULT_SETTINGS: GameSettings = { audio: true, music: true, ambience: true, haptics: true, reducedMotion: false, ballTrail: true };
 const INITIAL: GameSnapshot = {
   phase: "ready", score: 0, balls: 3, strategy: "harvester", currentMode: null, modeProgress: 0,
   modesComplete: [], multiplier: 1, prescienceShot: "citadel", combo: 0, message: "Choose your path", tilt: 0, ballSave: 0,
@@ -14,7 +14,7 @@ const SCORES_KEY = "worlds-of-spice:scores:v1";
 function readStored<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) as T : fallback;
+    return raw ? { ...fallback, ...JSON.parse(raw) } as T : fallback;
   } catch {
     return fallback;
   }
@@ -291,7 +291,7 @@ export default function PinballClient() {
           <section className="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <button className="close-button" onClick={() => setShowSettings(false)} aria-label="Close">×</button>
             <p className="eyebrow">CABINET OPTIONS</p><h2 id="settings-title">Settings</h2>
-            {Object.entries({ audio: "Original sound effects", haptics: "Touch haptics", reducedMotion: "Reduced motion", ballTrail: "High-visibility ball" }).map(([key, label]) => (
+            {Object.entries({ audio: "Mechanical sound effects", music: "Desert score", ambience: "Wind & shifting sand", haptics: "Touch haptics", reducedMotion: "Reduced motion", ballTrail: "High-visibility ball" }).map(([key, label]) => (
               <button className="setting-row" key={key} onClick={() => updateSetting(key as keyof GameSettings)}>
                 <span>{label}</span><b className={settings[key as keyof GameSettings] ? "toggle on" : "toggle"}>{settings[key as keyof GameSettings] ? "ON" : "OFF"}</b>
               </button>

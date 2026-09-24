@@ -1,5 +1,5 @@
-const CACHE = "worlds-of-spice-v1";
-const CORE = ["./", "./assets/playfield.png", "./manifest.webmanifest"];
+const CACHE = "worlds-of-spice-v2";
+const CORE = ["./", "./assets/playfield.png", "./audio/desert-theme.mp3", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(CORE)));
