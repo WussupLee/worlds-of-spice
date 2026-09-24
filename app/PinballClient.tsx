@@ -7,15 +7,13 @@ import { CabinetAudio } from "./game/audio";
 import {
   DEFAULT_SETTINGS,
   MODE_LABELS,
-  MODE_ORDER,
-  SHOT_LABELS,
   type GameSettings,
   type GameSnapshot,
   type HighScoreEntry,
 } from "./game/types";
 import { parseScores, parseSettings, saveLocal } from "./game/storage";
 
-const SETTINGS_KEY = "worlds-of-spice:settings:v2",
+const SETTINGS_KEY = "worlds-of-spice:settings:v3",
   SCORES_KEY = "worlds-of-spice:scores:v1";
 const INITIAL = new PinballEngine().snapshot();
 const format = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -90,6 +88,19 @@ export default function PinballClient() {
       history: HighScoreEntry[] = [];
     try {
       restored = parseSettings(localStorage.getItem(SETTINGS_KEY));
+      if (!localStorage.getItem(SETTINGS_KEY)) {
+        const previous = localStorage.getItem("worlds-of-spice:settings:v2");
+        if (previous) {
+          const prefs = parseSettings(previous);
+          restored = {
+            ...restored,
+            muted: prefs.muted,
+            haptics: prefs.haptics,
+            reducedMotion: prefs.reducedMotion,
+            ballTrail: prefs.ballTrail,
+          };
+        }
+      }
       history = parseScores(localStorage.getItem(SCORES_KEY));
       if (!localStorage.getItem(SETTINGS_KEY))
         restored.reducedMotion = matchMedia(
@@ -117,7 +128,16 @@ export default function PinballClient() {
       return;
     }
     const resize = new ResizeObserver(() => renderer.resize());
-    resize.observe(canvas.current!);
+    const surface = canvas.current!;
+    const lost = (event: Event) => {
+      event.preventDefault();
+      pause(true);
+      setError(
+        "Graphics interrupted. Reload to restore the cabinet; your best scores are saved.",
+      );
+    };
+    surface.addEventListener("webglcontextlost", lost);
+    resize.observe(surface);
     renderer.resize();
     queueMicrotask(() => setTableReady(true));
     let frame = 0,
@@ -130,10 +150,16 @@ export default function PinballClient() {
       last = now;
       renderer.draw(e, settingsRef.current, now / 1000);
       for (const ev of e.events.splice(0)) audio.current?.play(ev);
-      const rolling = e.balls.filter((b) => !b.waiting && !b.path);
+      const rolling = e.balls.filter(
+        (b) => !b.waiting && b.path?.kind !== "scoop",
+      );
       audio.current?.rolling(
-        Math.max(0, ...rolling.map((b) => Math.hypot(b.vx, b.vy))),
+        Math.max(
+          0,
+          ...rolling.map((b) => (b.path ? 750 : Math.hypot(b.vx, b.vy))),
+        ),
         rolling[0]?.x ?? 300,
+        rolling.some((b) => b.path?.kind === "ramp"),
       );
       if (now - lastUI > 75 || e.phase !== lastPhase) {
         lastUI = now;
@@ -149,11 +175,15 @@ export default function PinballClient() {
     };
     frame = requestAnimationFrame(loop);
     const hidden = () => {
-      if (document.hidden && engine.current?.phase === "playing") pause(true);
+      if (document.hidden) {
+        if (engine.current?.phase === "playing") pause(true);
+        else audio.current?.active(false);
+      }
     };
     const blur = () => {
       clearInputs();
       if (engine.current?.phase === "playing") pause(true);
+      else audio.current?.active(false);
     };
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("blur", blur);
@@ -162,6 +192,7 @@ export default function PinballClient() {
     return () => {
       cancelAnimationFrame(frame);
       resize.disconnect();
+      surface.removeEventListener("webglcontextlost", lost);
       renderer.destroy();
       audio.current?.destroy();
       document.removeEventListener("visibilitychange", hidden);
@@ -272,6 +303,7 @@ export default function PinballClient() {
     modal.current?.showModal();
   };
   const closeDialog = () => {
+    audio.current?.active(false);
     modal.current?.close();
     setDialog(null);
     if (resumeOnClose.current) {
@@ -317,9 +349,11 @@ export default function PinballClient() {
     <main className="game-page">
       <header className="masthead">
         <a className="wordmark" href="./" aria-label="Worlds of Spice home">
-          <span className="brand-sigil">◈</span>
+          <span className="brand-sigil" aria-hidden="true">
+            ◌
+          </span>
           <span>
-            WORLDS OF SPICE<small>PINBALL ODYSSEY / 01</small>
+            WORLDS OF SPICE<small>DESERT PINBALL</small>
           </span>
         </a>
         <div className="top-actions">
@@ -336,7 +370,7 @@ export default function PinballClient() {
             aria-label={settings.muted ? "Unmute audio" : "Mute audio"}
             aria-pressed={settings.muted}
           >
-            {settings.muted ? "SOUND OFF" : "SOUND ON"}
+            {settings.muted ? "OFF" : "ON"}
           </button>
           <button
             className="quiet-button"
@@ -359,40 +393,12 @@ export default function PinballClient() {
         </div>
       </header>
       <section className="arcade">
-        <aside className="story-panel">
-          <p className="eyebrow">AN ODYSSEY IN STEEL & SAND</p>
-          <h1>
-            The sands
-            <br />
-            remember<span>.</span>
-          </h1>
-          <p className="story-copy">
-            One silver sphere.
-            <br />
-            An empire beneath the dunes.
-          </p>
-          <div className="orbital-seal" aria-hidden="true">
-            <span />
-            <i />
-          </div>
-          <div className="story-caption">
-            <span>23° 42′ N / THE DEEP DESERT</span>
-            <p>
-              Read the paths. Ride the storm.
-              <br />
-              Awaken what sleeps below.
-            </p>
-          </div>
-          <button className="text-button" onClick={() => openDialog("help")}>
-            EXPLORE THE TABLE <span>↗</span>
-          </button>
-        </aside>
         <div className="cabinet">
           <div className="score-display">
             <div className="score-main">
-              <span>SCORE</span>
+              <span>PLAYER 01</span>
               <strong data-testid="score">
-                {format(state.score).padStart(7, "0")}
+                <DotScore value={state.score} />
               </strong>
             </div>
             <div className="ball-display">
@@ -403,14 +409,14 @@ export default function PinballClient() {
               </b>
             </div>
             <div className="multiplier-display">
-              <span>PRESCIENCE</span>
+              <span>MULTI</span>
               <b>
                 {state.multiplier}
                 <em>×</em>
               </b>
             </div>
           </div>
-          <div className="table-frame">
+          <div className="table-frame" data-playing={state.phase === "playing"}>
             <canvas
               ref={canvas}
               className="pinball-canvas"
@@ -438,8 +444,12 @@ export default function PinballClient() {
             />
             {state.phase === "ready" && (
               <div className="welcome">
-                <p className="eyebrow">THREE BALLS. ONE ODYSSEY.</p>
-                <h2>Enter the sands.</h2>
+                <p className="eyebrow">ONE TABLE · THREE BALLS</p>
+                <h2>
+                  DESERT
+                  <br />
+                  POWER
+                </h2>
                 <button
                   className="start-button"
                   onClick={start}
@@ -453,8 +463,8 @@ export default function PinballClient() {
             )}
             {state.phase === "paused" && (
               <div className="state-overlay">
-                <p className="eyebrow">THE DESERT CAN WAIT</p>
-                <h2>Paused.</h2>
+                <p className="eyebrow">CABINET PAUSED</p>
+                <h2>PAUSED</h2>
                 <button className="start-button" onClick={() => pause(false)}>
                   RETURN TO PLAY <span>▷</span>
                 </button>
@@ -468,7 +478,7 @@ export default function PinballClient() {
             )}
             {state.phase === "gameover" && (
               <div className="state-overlay">
-                <p className="eyebrow">THE SANDS REMEMBER</p>
+                <p className="eyebrow">GAME OVER</p>
                 <h2>{format(state.score)}</h2>
                 <p>
                   {state.modesComplete.length} territories ·{" "}
@@ -488,20 +498,33 @@ export default function PinballClient() {
             {error && (
               <div className="state-overlay" role="alert">
                 <p>{error}</p>
+                <button
+                  className="start-button"
+                  onClick={() => location.reload()}
+                >
+                  RELOAD TABLE
+                </button>
               </div>
             )}
           </div>
-          <div className="mission-strip" aria-live="polite" aria-atomic="true">
+          <div
+            className="mission-strip"
+            aria-live="polite"
+            aria-atomic="true"
+            title={modeName}
+          >
             <span
               className={state.ballSave ? "status-dot saved" : "status-dot"}
             />
             <div>
               <strong>
-                {state.ballSave
-                  ? `BALL SAVE · ${state.ballSave}s`
-                  : state.combo > 1
-                    ? `${state.combo}× FLOW · ${state.message}`
-                    : state.message}
+                {state.ramp
+                  ? `↑ ${state.ramp === "harvest" ? "HARVEST" : "HIGH DUNE"} · UPPER WIREFORM`
+                  : state.ballSave
+                    ? `BALL SAVE · ${state.ballSave}s`
+                    : state.combo > 1
+                      ? `${state.combo}× FLOW · ${state.message}`
+                      : state.message}
               </strong>
               <span>{state.instruction}</span>
             </div>
@@ -511,6 +534,12 @@ export default function PinballClient() {
                 <small>s</small>
               </b>
             )}
+          </div>
+          <div
+            className="flow-meter"
+            aria-label={`${state.combo} times flow, ${Math.ceil(state.comboSeconds)} seconds remaining`}
+          >
+            <span style={{ transform: `scaleX(${state.comboSeconds / 4})` }} />
           </div>
           <div className="control-deck">
             <button
@@ -606,74 +635,13 @@ export default function PinballClient() {
             </button>
           </div>
         </div>
-        <aside className="journey-panel">
-          <div className="journey-heading">
-            <span className="eyebrow">YOUR ODYSSEY</span>
-            <span>01—04</span>
-          </div>
-          <h2>{modeName}</h2>
-          <div className="territories">
-            {MODE_ORDER.map((m, i) => (
-              <div
-                key={m}
-                className={`${state.modesComplete.includes(m) ? "complete" : ""} ${state.currentMode === m ? "current" : ""}`}
-              >
-                <span>
-                  {state.modesComplete.includes(m)
-                    ? "◆"
-                    : String(i + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <b>{MODE_LABELS[m]}</b>
-                  <small>
-                    {
-                      [
-                        "Left & right ramps",
-                        "Outer orbit loops",
-                        "The central scoop",
-                        "Follow the lit arrow",
-                      ][i]
-                    }
-                  </small>
-                </div>
-                <i>
-                  {state.currentMode === m ? `${state.modeProgress}/4` : ""}
-                </i>
-              </div>
-            ))}
-          </div>
-          <div className="next-shot">
-            <span className="eyebrow">FOLLOW THE LIGHT</span>
-            <p>{SHOT_LABELS[state.prescienceShot]}</p>
-            <span>Selected shots raise your multiplier.</span>
-          </div>
-          <div className="wyrm-locks">
-            <span>WYRM LOCKS</span>
-            <div>
-              {[0, 1, 2].map((i) => (
-                <i className={i < state.locks ? "lit" : ""} key={i} />
-              ))}
-            </div>
-          </div>
-          <div className="tilt-indicator" title="Tilt danger">
-            <span style={{ width: `${state.tilt}%` }} />
-          </div>
-          <button className="best-button" onClick={() => openDialog("scores")}>
-            <span>PERSONAL BEST</span>
-            <b>{format(scores[0]?.score ?? 0)}</b>
-            <i>↗</i>
-          </button>
-          <p className="keyboard-hint">
-            SPACE to launch · Z / X to nudge
-            <br />P to pause · Or use the touch controls
-          </p>
-        </aside>
       </section>
       <footer className="colophon">
-        <span>AN ORIGINAL DESERT SCIENCE-FI PINBALL EXPERIENCE</span>
-        <button onClick={() => openDialog("credits")}>
-          SOUND & ART CREDITS ↗
+        <button onClick={() => openDialog("scores")}>
+          BEST {format(scores[0]?.score ?? 0)}
         </button>
+        <span>FLIP A / D · LAUNCH SPACE · NUDGE Z / X</span>
+        <button onClick={() => openDialog("credits")}>CREDITS</button>
       </footer>
       <dialog
         ref={modal}
@@ -693,7 +661,7 @@ export default function PinballClient() {
         {dialog === "help" && (
           <>
             <p className="eyebrow">THE FIELD GUIDE</p>
-            <h2>Find your flow.</h2>
+            <h2>TABLE GUIDE</h2>
             <div className="manual-controls">
               <span>
                 <kbd>A</kbd>
@@ -734,9 +702,9 @@ export default function PinballClient() {
                 to complete it.
               </li>
               <li>
-                <b>Build a spice cache.</b> Hit all three numbered stand-up
-                targets for 10,000 points and a five-second ball-save shield,
-                available once per ball.
+                <b>Build a spice cache.</b> Hit all three numbered drop targets
+                for 10,000 points and a five-second ball-save shield, available
+                once per ball.
               </li>
               <li>
                 <b>Awaken the Wyrm.</b> Three Citadel locks during open play
@@ -757,7 +725,7 @@ export default function PinballClient() {
         {dialog === "settings" && (
           <>
             <p className="eyebrow">TUNE YOUR CABINET</p>
-            <h2>Sound & feel.</h2>
+            <h2>SOUND & FEEL</h2>
             <p className="dialog-note">
               A restrained mix for headphones or your phone speaker. Changes
               apply immediately.
@@ -786,6 +754,23 @@ export default function PinballClient() {
                 />
               </label>
             ))}
+            <button
+              className="preview-audio"
+              onClick={() => audio.current?.preview()}
+            >
+              TEST SOUND · FLIP / IMPACT / SCORE
+            </button>
+            <p className="music-credit">
+              “Shadows and Dust” by{" "}
+              <a
+                href="https://www.scottbuckley.com.au/library/shadows-and-dust/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Scott Buckley
+              </a>{" "}
+              · CC BY 4.0
+            </p>
             {(
               [
                 ["haptics", "Touch haptics"],
@@ -812,7 +797,7 @@ export default function PinballClient() {
         {dialog === "scores" && (
           <>
             <p className="eyebrow">THE SANDS REMEMBER</p>
-            <h2>Your best journeys.</h2>
+            <h2>PERSONAL BESTS</h2>
             <div className="score-list">
               {scores.length ? (
                 scores.map((s, i) => (
@@ -834,25 +819,26 @@ export default function PinballClient() {
         {dialog === "credits" && (
           <>
             <p className="eyebrow">BEHIND THE DUNES</p>
-            <h2>Made for the journey.</h2>
+            <h2>CREDITS</h2>
             <p>
               Desert score:{" "}
               <a
-                href="https://opengameart.org/content/desert-theme-0"
+                href="https://www.scottbuckley.com.au/library/shadows-and-dust/"
                 target="_blank"
                 rel="noreferrer"
               >
-                “Desert Theme” by Tarush Singhal
+                “Shadows and Dust” by Scott Buckley
               </a>
               , released under{" "}
               <a
-                href="https://creativecommons.org/publicdomain/zero/1.0/"
+                href="https://creativecommons.org/licenses/by/4.0/"
                 target="_blank"
                 rel="noreferrer"
               >
-                CC0
+                CC BY 4.0
               </a>
-              .
+              . www.scottbuckley.com.au. Compressed to 128 kbps for mobile
+              playback; no musical edits.
             </p>
             <p>
               Pinball mechanisms, rolling steel, wind and shifting sands are
@@ -877,5 +863,43 @@ export default function PinballClient() {
         )}
       </dialog>
     </main>
+  );
+}
+
+const DIGITS = [
+  "11111100011000110001100011000111111",
+  "00100011000010000100001000010001110",
+  "11111000010000111111100001000011111",
+  "11111000010000101111000010000111111",
+  "10001100011000111111000010000100001",
+  "11111100001000011111000010000111111",
+  "11111100001000011111100011000111111",
+  "11111000010001000100010000100001000",
+  "11111100011000111111100011000111111",
+  "11111100011000111111000010000111111",
+];
+function DotScore({ value }: { value: number }) {
+  const digits = String(Math.round(value)).padStart(7, "0");
+  return (
+    <>
+      <span className="sr-only">{format(value).padStart(7, "0")}</span>
+      <svg
+        className="dot-score"
+        viewBox={`0 0 ${digits.length * 6} 7`}
+        aria-hidden="true"
+      >
+        {[...digits].flatMap((digit, i) =>
+          [...DIGITS[Number(digit)]].map((lit, j) => (
+            <circle
+              key={`${i}-${j}`}
+              cx={i * 6 + (j % 5) + 0.5}
+              cy={Math.floor(j / 5) + 0.5}
+              r=".34"
+              fill={lit === "1" ? "#ffc16c" : "#392616"}
+            />
+          )),
+        )}
+      </svg>
+    </>
   );
 }

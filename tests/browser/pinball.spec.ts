@@ -4,6 +4,10 @@ async function start(page: Page) {
   await page.goto("./");
   await page.getByRole("button", { name: "PLAY PINBALL" }).click();
   await expect(page.locator("canvas")).toHaveAttribute("data-phase", "playing");
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-renderer",
+    "webgl-3d",
+  );
 }
 async function launch(page: Page) {
   await page.keyboard.down("Space");
@@ -173,8 +177,83 @@ test("sound graph plays, pauses and restores the three saved mixer controls", as
     .getByRole("button", { name: "Audio and display settings" })
     .click();
   await expect.poll(async () => (await getAudio()).state).toBe("suspended");
+  await page.getByRole("button", { name: "TEST SOUND" }).click();
+  await expect.poll(async () => (await getAudio()).state).toBe("running");
+  await expect(page.locator("canvas")).toHaveAttribute("data-phase", "paused");
+  await expect
+    .poll(async () => (await getAudio()).state, { timeout: 8500 })
+    .toBe("suspended");
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect.poll(async () => (await getAudio()).state).toBe("running");
+});
+
+test("graphics context loss pauses the ball and offers an explicit recovery", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    browserName !== "chromium",
+    "Context-loss extension test in Chromium.",
+  );
+  await start(page);
+  await launch(page);
+  await page.locator("canvas").evaluate((canvas: HTMLCanvasElement) => {
+    canvas
+      .getContext("webgl2")!
+      .getExtension("WEBGL_lose_context")!
+      .loseContext();
+  });
+  await expect(page.locator("canvas")).toHaveAttribute("data-phase", "paused");
+  await expect(
+    page.getByRole("button", { name: "RELOAD TABLE" }),
+  ).toBeVisible();
+});
+
+test("mechanism output is audible with score and wind turned down", async ({
+  page,
+}) => {
+  test.skip(
+    !(await page.evaluate(() => typeof window.AudioContext === "function")),
+    "Web Audio unavailable in this browser binary.",
+  );
+  await page.addInitScript(() => {
+    const Original = window.AudioContext;
+    window.AudioContext = class extends Original {
+      createDynamicsCompressor() {
+        const node = super.createDynamicsCompressor();
+        const meter = this.createAnalyser();
+        meter.fftSize = 2048;
+        node.connect(meter);
+        (window as unknown as { __meter: AnalyserNode }).__meter = meter;
+        return node;
+      }
+    };
+  });
+  await start(page);
+  await page
+    .getByRole("button", { name: "Audio and display settings" })
+    .click();
+  for (const name of ["Desert score", "Wind & shifting sand"]) {
+    await page.getByRole("slider", { name }).focus();
+    await page.keyboard.press("Home");
+  }
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  const [peak] = await Promise.all([
+    page.evaluate(async () => {
+      const meter = (window as unknown as { __meter: AnalyserNode }).__meter;
+      const samples = new Float32Array(meter.fftSize);
+      let peak = 0;
+      for (let i = 0; i < 25; i++) {
+        await new Promise(requestAnimationFrame);
+        meter.getFloatTimeDomainData(samples);
+        for (const value of samples) peak = Math.max(peak, Math.abs(value));
+      }
+      return peak;
+    }),
+    page.keyboard.press("ArrowLeft", { delay: 100 }),
+  ]);
+  expect(peak).toBeGreaterThan(0.015);
+  expect(peak).toBeLessThan(0.98);
 });
 
 test("all three mixer settings remain adjustable and persist after reload", async ({
@@ -328,7 +407,7 @@ test("the production game and ranged soundtrack work after an offline reload", a
   await page.getByRole("button", { name: "PLAY PINBALL" }).click();
   await launch(page);
   const range = await page.evaluate(async () => {
-    const response = await fetch("./audio/desert-theme.mp3", {
+    const response = await fetch("./audio/shadows-and-dust.mp3", {
       headers: { Range: "bytes=0-1023" },
     });
     return {

@@ -18,10 +18,10 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: "./og.png",
-        width: 1200,
-        height: 630,
-        alt: "Worlds of Spice desert pinball table",
+        url: "./og-v3.png",
+        width: 1728,
+        height: 910,
+        alt: "Illustrated Worlds of Spice cover: silver pinball, chrome returns and a desert worm",
       },
     ],
   },
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Worlds of Spice",
     description: "A desert pinball odyssey.",
-    images: ["./og.png"],
+    images: ["./og-v3.png"],
   },
 };
 

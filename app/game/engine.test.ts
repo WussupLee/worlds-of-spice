@@ -254,7 +254,15 @@ describe("progression and shot strategy", () => {
           expect(b.x).toBeLessThanOrEqual(600);
         }
       }
-      expect(e.phase).toBe("gameover");
+      expect(
+        e.phase,
+        JSON.stringify({
+          seed,
+          clock: e.clock,
+          balls: e.balls,
+          remaining: e.ballsRemaining,
+        }),
+      ).toBe("gameover");
       expect(e.ballsRemaining).toBe(0);
     }
   });

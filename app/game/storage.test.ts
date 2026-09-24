@@ -14,5 +14,5 @@ it("clamps mixer settings and falls back safely for corrupt preferences", () => 
     musicVolume: 1,
     effectsVolume: 0,
   });
-  expect(parseSettings("oops").musicVolume).toBe(0.22);
+  expect(parseSettings("oops").musicVolume).toBe(0.34);
 });

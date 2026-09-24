@@ -1,710 +1,1088 @@
+import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   BUMPERS,
-  HEIGHT,
   RAILS,
   RAMP_PATHS,
   SHOTS,
   SLINGS,
   TARGETS,
-  WIDTH,
+  ballHeight,
   pathPoint,
-  type Flipper,
+  rampHeight,
   type PinballEngine,
-  type Point,
 } from "./engine";
 import {
   MODE_ORDER,
   SHOT_ORDER,
   type GameSettings,
-  type ModeId,
+  type ShotId,
 } from "./types";
 import { modeTarget } from "./rules";
 
-const INK = "#152c3a",
-  BONE = "#f4deb0",
-  ORANGE = "#ef763f",
-  BLUE = "#74c9d5";
-type Ctx = CanvasRenderingContext2D;
-function circle(
-  c: Ctx,
-  x: number,
-  y: number,
-  r: number,
-  fill: string | CanvasGradient,
-  stroke?: string,
-  width = 1,
-) {
-  c.beginPath();
-  c.arc(x, y, r, 0, Math.PI * 2);
-  c.fillStyle = fill;
-  c.fill();
-  if (stroke) {
-    c.strokeStyle = stroke;
-    c.lineWidth = width;
-    c.stroke();
-  }
-}
-function line(c: Ctx, points: Point[], color: string, width: number) {
-  c.beginPath();
-  points.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
-  c.lineWidth = width;
-  c.strokeStyle = color;
-  c.lineCap = "round";
-  c.lineJoin = "round";
-  c.stroke();
-}
-function text(
-  c: Ctx,
-  s: string,
-  x: number,
-  y: number,
-  size = 10,
-  color = BONE,
-  spacing = 1,
-) {
-  c.save();
-  c.textAlign = "center";
-  c.fillStyle = color;
-  c.font = `${size < 14 ? 600 : 400} ${size}px ${size >= 20 ? "Georgia" : "Arial"}`;
-  c.letterSpacing = `${spacing}px`;
-  c.fillText(s, x, y);
-  c.restore();
-}
-function bolt(c: Ctx, x: number, y: number) {
-  circle(c, x + 1, y + 2, 4, "#092333");
-  circle(c, x, y, 3, "#bdd4d1", INK);
-  line(
-    c,
-    [
-      { x: x - 2, y: y + 1 },
-      { x: x + 2, y: y - 1 },
-    ],
-    INK,
-    1,
-  );
-}
-function rail(c: Ctx, points: Point[], width = 10, color = "#b9cdd0") {
-  c.save();
-  c.translate(3, 8);
-  line(c, points, "rgba(2,12,23,.6)", width + 5);
-  c.restore();
-  line(c, points, INK, width + 3);
-  line(c, points, color, width);
-  c.save();
-  c.translate(-1, -2);
-  line(c, points, "#fff0cf", Math.max(1, width * 0.22));
-  c.restore();
-}
-function smoothPath(points: Point[]) {
-  return Array.from({ length: 100 }, (_, i) => pathPoint(points, i / 99));
-}
-function lamp(
-  c: Ctx,
-  x: number,
-  y: number,
-  lit: boolean,
-  color = ORANGE,
-  size = 7,
-) {
-  if (lit) {
-    c.save();
-    c.shadowColor = color;
-    c.shadowBlur = 18;
-    circle(c, x, y, size, color, INK, 2);
-    c.restore();
-    circle(c, x - 1, y - 2, size * 0.36, "#fff2b8");
-  } else circle(c, x, y, size, "#173b49", "#b49a65", 1);
-}
-function arrow(c: Ctx, x: number, y: number, color: string, lit: boolean) {
-  c.save();
-  c.translate(x, y);
-  c.shadowColor = color;
-  c.shadowBlur = lit ? 18 : 0;
-  c.beginPath();
-  c.moveTo(0, -13);
-  c.lineTo(10, 1);
-  c.lineTo(4, 1);
-  c.lineTo(4, 12);
-  c.lineTo(-4, 12);
-  c.lineTo(-4, 1);
-  c.lineTo(-10, 1);
-  c.closePath();
-  c.fillStyle = lit ? color : "#253f49";
-  c.fill();
-  c.strokeStyle = lit ? "#fff1c3" : "#8a917b";
-  c.lineWidth = 1;
-  c.stroke();
-  c.restore();
-}
+const V = (x: number, y: number, h = 0) =>
+  new THREE.Vector3(x - 300, h, y - 500);
+const standard = (color: string, metalness = 0, roughness = 0.5) =>
+  new THREE.MeshStandardMaterial({ color, metalness, roughness });
+type Lamp = {
+  mesh: THREE.Mesh;
+  mat: THREE.MeshStandardMaterial;
+  shot?: ShotId;
+  mode?: number;
+  lock?: number;
+  save?: boolean;
+};
 
+/** A real depth-buffered cabinet. Physics stays deterministic on the playfield;
+ * elevated paths use exactly the same spline and height function as their meshes. */
 export class TableRenderer {
-  private ctx: Ctx;
-  private background: HTMLCanvasElement;
-  private art: HTMLImageElement;
+  private renderer: THREE.WebGLRenderer;
+  private scene = new THREE.Scene();
+  private camera = new THREE.PerspectiveCamera(31, 0.6, 10, 5000);
+  private fixed = new THREE.Group();
+  private chrome = standard("#b7c8d1", 0.93, 0.19);
+  private steel = standard("#f4f8fa", 1, 0.08);
+  private black = standard("#172025", 0.55, 0.38);
+  private rubber = standard("#262d2e", 0.05, 0.8);
+  private bone = standard("#f5e4bb", 0.3, 0.29);
+  private brass = standard("#b49059", 0.72, 0.32);
+  private orange = standard("#b44420", 0.3, 0.42);
+  private blue = standard("#23576a", 0.5, 0.4);
+  private balls = new Map<
+    number,
+    { ball: THREE.Mesh; shadow: THREE.Mesh; trail: THREE.Line }
+  >();
+  private flippers: THREE.Group[] = [];
+  private bumpers: THREE.Group[] = [];
+  private targets: THREE.Group[] = [];
+  private lamps: Lamp[] = [];
+  private gates: THREE.Group[] = [];
+  private spinners: THREE.Group[] = [];
+  private spinnerAngles = [0, 0];
+  private worm = new THREE.Group();
+  private harvester = new THREE.Group();
+  private pulse: THREE.Mesh[] = [];
+  private textures: THREE.Texture[] = [];
+  private environment: THREE.WebGLRenderTarget;
   private disposed = false;
+  private last = 0;
+  private routeLights: Array<{
+    mesh: THREE.Mesh;
+    shot: "harvest" | "dune";
+    t: number;
+  }> = [];
+  private keyLight: THREE.DirectionalLight;
+  private slowFrames = 0;
+  private qualityReduced = false;
   constructor(private canvas: HTMLCanvasElement) {
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) throw new Error("Canvas is unavailable");
-    this.ctx = ctx;
-    this.background = document.createElement("canvas");
-    this.background.width = 1200;
-    this.background.height = 2000;
-    this.art = new Image();
-    this.art.src = "./assets/playfield.png";
-    this.art.onload = () => {
-      if (!this.disposed) this.paintBackground();
-    };
-    this.paintBackground();
-  }
-  resize() {
-    const rect = this.canvas.getBoundingClientRect(),
-      dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = Math.round(rect.width * dpr),
-      h = Math.round(rect.height * dpr);
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-    }
-  }
-  private paintBackground() {
-    const c = this.background.getContext("2d")!;
-    c.setTransform(2, 0, 0, 2, 0, 0);
-    c.fillStyle = "#183341";
-    c.fillRect(0, 0, WIDTH, HEIGHT);
-    c.save();
-    c.beginPath();
-    c.roundRect(18, 20, 566, 955, [140, 140, 40, 40]);
-    c.clip();
-    if (this.art.complete && this.art.naturalWidth)
-      c.drawImage(this.art, 20, 0, 560, 1000);
-    const veil = c.createLinearGradient(0, 0, 0, 1000);
-    veil.addColorStop(0, "rgba(5,28,49,.4)");
-    veil.addColorStop(0.45, "rgba(216,127,69,.1)");
-    veil.addColorStop(1, "rgba(230,166,91,.48)");
-    c.fillStyle = veil;
-    c.fillRect(0, 0, 600, 1000);
-    // Printed crosshatching and fine contours make the playfield read as lacquered art.
-    c.globalAlpha = 0.17;
-    for (let y = 516; y < 850; y += 8) {
-      c.beginPath();
-      c.moveTo(90, y);
-      c.bezierCurveTo(190, y - 32, 372, y + 54, 490, y - 3);
-      c.strokeStyle = INK;
-      c.lineWidth = 0.55;
-      c.stroke();
-    }
-    c.globalAlpha = 1;
-    c.fillStyle = "rgba(10,35,48,.17)";
-    c.fillRect(42, 115, 490, 775);
-    // Recessed orbit trough.
-    const orbit = [
-      { x: 84, y: 556 },
-      { x: 81, y: 226 },
-      { x: 87, y: 132 },
-      { x: 153, y: 80 },
-      { x: 435, y: 80 },
-      { x: 509, y: 141 },
-      { x: 507, y: 560 },
-    ];
-    line(c, orbit, "rgba(1,15,27,.68)", 43);
-    line(c, orbit, "rgba(50,107,124,.48)", 30);
-    rail(
-      c,
-      [
-        { x: 64, y: 557 },
-        { x: 59, y: 225 },
-        { x: 65, y: 122 },
-        { x: 144, y: 58 },
-        { x: 442, y: 58 },
-        { x: 530, y: 127 },
-        { x: 529, y: 560 },
-      ],
-      5,
-    );
-    // Apron and drain. Side outlanes are deliberately visible.
-    c.fillStyle = "#102c3a";
-    c.beginPath();
-    c.moveTo(22, 779);
-    c.lineTo(152, 900);
-    c.lineTo(448, 900);
-    c.lineTo(580, 781);
-    c.lineTo(582, 1000);
-    c.lineTo(18, 1000);
-    c.closePath();
-    c.fill();
-    line(
-      c,
-      [
-        { x: 42, y: 928 },
-        { x: 149, y: 955 },
-        { x: 452, y: 955 },
-        { x: 558, y: 928 },
-      ],
-      "#d09a63",
-      2,
-    );
-    text(c, "W O R L D S   O F   S P I C E", 300, 942, 15, BONE, 1);
-    text(c, "THE DESERT REMEMBERS", 300, 965, 7, "#93adb0", 2);
-    for (const r of RAILS) {
-      if (r.kind) continue;
-      rail(c, [r.a, r.b], r.radius * 1.55);
-      bolt(c, r.a.x, r.a.y);
-    }
-    // Slingshot plastics: illustrated shield, rubber edge, visible fasteners.
-    for (const side of [0, 1]) {
-      c.save();
-      if (side) {
-        c.translate(582, 0);
-        c.scale(-1, 1);
-      }
-      c.shadowColor = "rgba(0,0,0,.7)";
-      c.shadowBlur = 7;
-      c.shadowOffsetY = 9;
-      c.beginPath();
-      SLINGS[0].forEach((p, i) =>
-        i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y),
-      );
-      c.closePath();
-      c.fillStyle = "#245268";
-      c.fill();
-      c.shadowBlur = 0;
-      c.shadowOffsetY = 0;
-      c.strokeStyle = BONE;
-      c.lineWidth = 3;
-      c.stroke();
-      line(
-        c,
-        [
-          { x: 122, y: 656 },
-          { x: 194, y: 743 },
-        ],
-        "#f5b085",
-        7,
-      );
-      for (let j = 0; j < 6; j++)
-        line(
-          c,
-          [
-            { x: 122, y: 669 + j * 7 },
-            { x: 139 + j * 6, y: 701 + j * 7 },
-          ],
-          "#9bb8b4",
-          0.7,
-        );
-      bolt(c, 122, 660);
-      bolt(c, 180, 738);
-      text(c, "S", 143, 712, 22, BONE);
-      c.restore();
-    }
-    // Target faces and their articulated bases.
-    TARGETS.forEach((p, i) => {
-      c.fillStyle = "#102b3b";
-      c.fillRect(p.x - 20, p.y - 5, 40, 17);
-      c.fillStyle = "#f5ce8e";
-      c.fillRect(p.x - 16, p.y - 11, 32, 11);
-      c.strokeStyle = INK;
-      c.lineWidth = 2;
-      c.strokeRect(p.x - 16, p.y - 11, 32, 11);
-      text(c, ["I", "II", "III"][i], p.x, p.y - 2, 8, INK, 0);
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      powerPreference: "high-performance",
     });
-    // Pop bumpers: feet, recessed rings, enamel caps and metal collars.
-    BUMPERS.forEach((p, i) => {
-      circle(c, p.x + 4, p.y + 11, 40, "rgba(4,23,35,.6)");
-      circle(c, p.x, p.y, 38, "#193b4b", BONE, 1);
-      circle(c, p.x, p.y, 32, "#7faaa9", INK, 2);
-      circle(c, p.x, p.y - 4, 28, "#f2c987", INK, 3);
-      circle(c, p.x, p.y - 7, 23, i === 2 ? "#2f6e84" : "#dc6838", BONE, 2);
-      circle(c, p.x, p.y - 7, 16, "transparent", BONE, 1);
-      text(c, ["✦", "✦", "✦"][i], p.x, p.y + 1, 25, BONE, 0);
-      for (let j = 0; j < 3; j++) {
-        const a = j * 2.1;
-        bolt(c, p.x + Math.cos(a) * 34, p.y + Math.sin(a) * 34);
-      }
+    this.renderer.setClearColor(0x070b10, 0);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.65));
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.02;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.BasicShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const room = new RoomEnvironment();
+    this.environment = pmrem.fromScene(room, 0.04);
+    this.scene.environment = this.environment.texture;
+    this.scene.environmentIntensity = 0.48;
+    room.dispose();
+    pmrem.dispose();
+    this.scene.add(this.fixed);
+    this.scene.add(new THREE.HemisphereLight(0xa6c4e0, 0x81502d, 1.7));
+    this.keyLight = new THREE.DirectionalLight(0xffe4b5, 2.6);
+    this.keyLight.position.set(-340, 700, 120);
+    this.keyLight.castShadow = true;
+    Object.assign(this.keyLight.shadow.camera, {
+      left: -400,
+      right: 400,
+      top: 680,
+      bottom: -650,
+      near: 10,
+      far: 1600,
     });
-    text(c, "SPICE FIELDS", 298, 308, 8, BONE, 2);
-    // Creature scoop, a sculpted ribbed throat above the central shot.
-    circle(c, 303, 165, 56, "rgba(0,10,19,.55)");
-    for (let i = 9; i >= 0; i--) {
-      const radius = 21 + i * 3.15,
-        y = 162 - i * 0.8;
-      circle(c, 298, y, radius, i % 2 ? "#bd623a" : "#f0b479", INK, 1.3);
-    }
-    circle(c, 298, 162, 22, "#071b2b", BONE, 1);
-    for (let j = 0; j < 26; j++) {
-      const a = (j * Math.PI * 2) / 26;
-      line(
-        c,
-        [
-          { x: 298 + Math.cos(a) * 33, y: 162 + Math.sin(a) * 33 },
-          {
-            x: 298 + Math.cos(a + 0.04) * 22,
-            y: 162 + Math.sin(a + 0.04) * 22,
-          },
-        ],
-        "#fbdeb0",
-        1.4,
-      );
-    }
-    text(c, "THE GREAT WYRM", 298, 112, 10, BONE, 1.3);
-    text(c, "CITADEL · LOCK", 298, 222, 8, BONE, 0.8);
-    // Raised clear-blue ramps sit above the inked landscape.
-    for (const name of ["harvest", "dune"] as const) {
-      const path = smoothPath(RAMP_PATHS[name]);
-      c.save();
-      c.translate(7, 15);
-      line(c, path, "rgba(4,16,27,.6)", 28);
-      c.restore();
-      line(c, path, INK, 30);
-      line(c, path, "#528d9b", 26);
-      line(c, path, "#2b6174", 18);
-      line(c, path, "#79aeb6", 1.4);
-      const offset = (amount: number) =>
-        path.map((p, i) => {
-          const prev = path[Math.max(0, i - 1)],
-            next = path[Math.min(path.length - 1, i + 1)],
-            dx = next.x - prev.x,
-            dy = next.y - prev.y,
-            d = Math.hypot(dx, dy) || 1;
-          return { x: p.x - (dy / d) * amount, y: p.y + (dx / d) * amount };
-        });
-      rail(c, offset(13), 3);
-      rail(c, offset(-13), 3);
-      [0.1, 0.45, 0.7, 0.9].forEach((t) => {
-        const p = pathPoint(RAMP_PATHS[name], t);
-        line(
-          c,
-          [
-            { x: p.x, y: p.y + 4 },
-            { x: p.x + 6, y: p.y + 24 },
-          ],
-          "#243c43",
-          4,
-        );
-        bolt(c, p.x + 6, p.y + 24);
+    this.keyLight.shadow.mapSize.set(1024, 1024);
+    this.keyLight.shadow.bias = -0.0003;
+    this.keyLight.shadow.normalBias = 0.5;
+    this.scene.add(this.keyLight);
+    const rim = new THREE.DirectionalLight(0x7ba7e8, 2.2);
+    rim.position.set(420, 350, -450);
+    this.scene.add(rim);
+    this.buildCabinet();
+    this.buildMechanisms();
+    this.batchStaticGeometry();
+    this.batchStaticGeometry(this.worm);
+    this.batchStaticGeometry(this.harvester);
+    for (const group of [
+      ...this.flippers,
+      ...this.bumpers,
+      ...this.targets,
+      ...this.gates,
+      ...this.spinners,
+    ])
+      group.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.castShadow = false;
       });
-      const start = RAMP_PATHS[name][0];
-      line(
-        c,
-        [
-          { x: start.x - 16, y: start.y + 12 },
-          { x: start.x + 16, y: start.y + 12 },
-        ],
-        "#f9d794",
-        4,
+    canvas.dataset.renderer = "webgl-3d";
+    this.resize();
+  }
+  private mesh(
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    at: THREE.Vector3,
+    parent: THREE.Object3D = this.fixed,
+  ) {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(at);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+  private box(
+    x: number,
+    y: number,
+    h: number,
+    w: number,
+    depth: number,
+    tall: number,
+    mat: THREE.Material,
+    parent = this.fixed,
+  ) {
+    return this.mesh(
+      new THREE.BoxGeometry(w, tall, depth),
+      mat,
+      V(x, y, h),
+      parent,
+    );
+  }
+  private cylinder(
+    x: number,
+    y: number,
+    h: number,
+    radius: number,
+    tall: number,
+    mat: THREE.Material,
+    parent: THREE.Object3D = this.fixed,
+  ) {
+    return this.mesh(
+      new THREE.CylinderGeometry(radius, radius, tall, 20),
+      mat,
+      V(x, y, h),
+      parent,
+    );
+  }
+  private pipe(
+    points: THREE.Vector3[],
+    radius: number,
+    mat: THREE.Material,
+    parent = this.fixed,
+    segments = 48,
+  ) {
+    return this.mesh(
+      new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(points),
+        segments,
+        radius,
+        6,
+        false,
+      ),
+      mat,
+      new THREE.Vector3(),
+      parent,
+    );
+  }
+  private torus(
+    x: number,
+    y: number,
+    h: number,
+    r: number,
+    tube: number,
+    mat: THREE.Material,
+    parent = this.fixed,
+  ) {
+    const m = this.mesh(
+      new THREE.TorusGeometry(r, tube, 8, 32),
+      mat,
+      V(x, y, h),
+      parent,
+    );
+    m.rotation.x = Math.PI / 2;
+    return m;
+  }
+  private screw(x: number, y: number, h = 12) {
+    this.cylinder(x, y, h, 3.3, 2, this.chrome);
+    this.box(x, y, h + 1.2, 4, 0.8, 0.3, this.black);
+  }
+  private decal(
+    text: string,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    color = "#ebd6ac",
+  ) {
+    const c = document.createElement("canvas");
+    c.width = 512;
+    c.height = 64;
+    const ctx = c.getContext("2d")!;
+    ctx.font = "600 36px 'Arial Narrow', Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = color;
+    ctx.fillText(text, 256, 33, 498);
+    const texture = new THREE.CanvasTexture(c);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.textures.push(texture);
+    const mat = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+    });
+    const m = this.mesh(new THREE.PlaneGeometry(w, h), mat, V(x, y, 2.1));
+    m.rotation.x = -Math.PI / 2;
+    m.castShadow = false;
+  }
+  private buildCabinet() {
+    const art = new THREE.TextureLoader().load("./assets/playfield.png", () => {
+      if (!this.disposed) art.needsUpdate = true;
+    });
+    art.colorSpace = THREE.SRGBColorSpace;
+    art.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    this.textures.push(art);
+    const print = standard("#f1deca", 0.1, 0.51);
+    print.map = art;
+    this.box(300, 500, -16, 616, 1016, 28, this.black);
+    const deck = this.mesh(
+      new THREE.PlaneGeometry(600, 1000),
+      print,
+      V(300, 500, 0),
+    );
+    deck.rotation.x = -Math.PI / 2;
+    deck.castShadow = false;
+    // Sidewalls, lockdown bar and shooter channel form an actual cabinet volume.
+    for (const x of [9, 591]) {
+      this.box(x, 498, 22, 17, 1008, 56, this.black);
+      this.box(x, 498, 53, 19, 1008, 5, this.chrome);
+      this.box(x < 300 ? 19 : 581, 500, 28, 2, 980, 3, this.brass);
+      for (let y = 140; y < 920; y += 150) this.screw(x, y, 56);
+    }
+    this.box(300, 18, 28, 600, 24, 64, this.black);
+    this.box(300, 980, 4, 580, 35, 29, this.black);
+    this.box(300, 968, 23, 603, 12, 15, this.chrome);
+    this.box(299, 920, 0.6, 365, 78, 1, this.black);
+    this.decal("W O R L D S   O F   S P I C E", 297, 914, 323, 26);
+    this.decal("D E S E R T   P I N B A L L", 297, 937, 184, 11, "#9fa6a2");
+    this.decal("P R E S C I E N C E", 298, 579, 182, 22, "#efe0b0");
+    this.decal("HARVEST", 155, 509, 83, 16);
+    this.decal("HIGH DUNE", 441, 509, 91, 16);
+    this.decal("CITADEL  /  LOCK", 298, 213, 107, 12);
+    this.decal("FLOW  ×  5", 298, 736, 98, 15);
+    this.decal("SHOOT AGAIN", 298, 868, 102, 12);
+    this.makeLamp(298, 850, undefined, undefined, 6);
+    this.lamps.at(-1)!.save = true;
+    this.decal("WYRM LOCKS", 298, 716, 97, 12);
+    for (let i = 0; i < 3; i++) {
+      this.makeLamp(274 + i * 24, 697, undefined, undefined, 6);
+      this.lamps.at(-1)!.lock = i;
+    }
+    for (const [i, label] of [
+      "HARVEST",
+      "STORM",
+      "SIEGE",
+      "ORACLE",
+    ].entries()) {
+      this.decal(
+        label,
+        220 + (i % 2) * 151,
+        627 + Math.floor(i / 2) * 43,
+        105,
+        14,
+      );
+      this.makeLamp(
+        220 + (i % 2) * 151,
+        609 + Math.floor(i / 2) * 43,
+        undefined,
+        i,
       );
     }
-    text(c, "HARVEST", 154, 458, 9, BONE, 0.8);
-    text(c, "HIGH DUNE", 443, 458, 9, BONE, 0.8);
-    text(c, "CARAVAN", 83, 423, 7, BONE, 0.5);
-    text(c, "STORM", 506, 423, 7, BONE, 0.5);
-    // Quiet open space below the mechanisms preserves ball tracking.
-    c.save();
-    c.translate(294, 601);
-    c.rotate(-0.04);
-    text(c, "WORLDS", 0, -15, 32, "#f6dfb6", 3);
-    text(c, "OF SPICE", 0, 16, 30, "#f6dfb6", 3);
-    text(c, "A DESERT ODYSSEY", 0, 37, 7, INK, 2);
-    c.restore();
-    for (let j = 0; j < 4; j++) {
-      const x = 226 + j * 45;
-      circle(c, x, 671, 13, "#1c3d4c", BONE, 1);
-      text(c, ["H", "S", "C", "O"][j], x, 675, 9, "#809695", 0);
-    }
-    text(c, "TERRITORIES", 295, 705, 7, INK, 2);
-    text(c, "BALL SAVE", 292, 781, 8, INK, 1.5);
-    text(c, "RETURN", 114, 771, 7, BONE, 0.8);
-    text(c, "RETURN", 465, 771, 7, BONE, 0.8);
-    c.save();
-    c.translate(558, 652);
-    c.rotate(-Math.PI / 2);
-    text(c, "LAUNCH   /   ORBITAL ASCENT", 0, 3, 7, "#e7be7d", 2);
-    c.restore();
-    // Mechanical plunger, visible coil and barrel.
-    c.fillStyle = "#091f2e";
-    c.fillRect(549, 908, 18, 61);
-    for (let y = 914; y < 956; y += 5)
-      line(
-        c,
-        [
-          { x: 551, y },
-          { x: 565, y: y + 2 },
-        ],
-        "#a5b5ac",
-        2,
+    // The ground orbit remains below the wireforms, with its own fine guide rails.
+    this.pipe(
+      [
+        V(55, 425, 9),
+        V(53, 219, 9),
+        V(98, 89, 9),
+        V(297, 45, 9),
+        V(489, 87, 9),
+        V(532, 214, 9),
+        V(530, 426, 9),
+      ],
+      3,
+      this.chrome,
+      this.fixed,
+      72,
+    );
+    for (const r of RAILS) {
+      this.pipe(
+        [V(r.a.x, r.a.y, 7), V(r.b.x, r.b.y, 7)],
+        r.radius,
+        this.rubber,
+        this.fixed,
+        1,
       );
-    rail(
-      c,
-      [
-        { x: 558, y: 902 },
-        { x: 558, y: 918 },
-      ],
-      9,
-    );
-    c.restore();
-    // Cabinet bezel and bevel. Warm upper edge, cold recessed inner edge.
-    c.beginPath();
-    c.roundRect(16, 16, 572, 968, [135, 135, 28, 28]);
-    c.strokeStyle = "#091c28";
-    c.lineWidth = 19;
-    c.stroke();
-    c.strokeStyle = "#527684";
-    c.lineWidth = 7;
-    c.stroke();
-    c.strokeStyle = "#f0bd7e";
-    c.lineWidth = 1.3;
-    c.stroke();
-    [32, 570].forEach((x) => [285, 550, 897].forEach((y) => bolt(c, x, y)));
-  }
-  private flipper(c: Ctx, f: Flipper) {
-    c.save();
-    c.translate(f.x, f.y);
-    c.rotate(f.angle);
-    c.shadowColor = "#071c2c";
-    c.shadowBlur = 8;
-    c.shadowOffsetY = 8;
-    c.beginPath();
-    c.moveTo(0, -12);
-    c.lineTo(f.length, -7);
-    c.arc(f.length, 0, 7, -Math.PI / 2, Math.PI / 2);
-    c.lineTo(0, 12);
-    c.arc(0, 0, 12, Math.PI / 2, Math.PI * 1.5);
-    c.closePath();
-    c.fillStyle = "#df6539";
-    c.fill();
-    c.shadowBlur = 0;
-    c.shadowOffsetY = 0;
-    c.strokeStyle = "#162f3e";
-    c.lineWidth = 3;
-    c.stroke();
-    line(
-      c,
-      [
-        { x: 3, y: -6 },
-        { x: f.length - 1, y: -3 },
-      ],
-      "#ffe2a6",
-      6,
-    );
-    circle(c, 0, 0, 8, "#e8d6aa", INK, 1);
-    circle(c, 0, 0, 3, "#568799");
-    c.restore();
-  }
-  draw(e: PinballEngine, settings: GameSettings, ambientTime: number) {
-    const c = this.ctx;
-    c.setTransform(
-      this.canvas.width / WIDTH,
-      0,
-      0,
-      this.canvas.height / HEIGHT,
-      0,
-      0,
-    );
-    c.drawImage(this.background, 0, 0, WIDTH, HEIGHT);
-    const time = e.phase === "ready" ? ambientTime : e.clock;
-    if (!settings.reducedMotion) {
-      // Fine drifting grains, not a screen-wide particle storm.
-      c.save();
-      c.globalAlpha = 0.22;
-      for (let i = 0; i < 27; i++) {
-        const x = ((i * 97.33 + time * 13) % 460) + 64,
-          y = 518 + ((i * 73.71 + Math.sin(time * 0.2 + i) * 12) % 259);
-        line(
-          c,
-          [
-            { x, y },
-            { x: x + 2.5, y: y - 0.7 },
-          ],
-          "#ffe7be",
-          0.6,
-        );
+      this.pipe(
+        [V(r.a.x, r.a.y, 18), V(r.b.x, r.b.y, 18)],
+        2.7,
+        this.chrome,
+        this.fixed,
+        1,
+      );
+      for (const p of [r.a, r.b]) {
+        this.cylinder(p.x, p.y, 9, 5, 21, this.brass);
+        this.screw(p.x, p.y, 21);
       }
-      c.restore();
     }
     for (const shot of SHOT_ORDER) {
       const p = SHOTS[shot];
-      const mission =
-        e.mode &&
-        MODE_ORDER.includes(e.mode as ModeId) &&
-        modeTarget(e.mode as ModeId, shot, SHOT_ORDER[e.prescienceIndex]);
-      const lit =
-        (SHOT_ORDER[e.prescienceIndex] === shot ||
-          mission ||
-          e.mode === "multiball" ||
-          e.mode === "wizard") &&
-        !e.tilted;
-      const y = shot === "citadel" ? 418 : p.y + 61;
-      arrow(c, p.x, y, mission ? BLUE : ORANGE, Boolean(lit));
-      if (lit && !settings.reducedMotion) {
-        c.save();
-        c.globalAlpha = 0.17 + 0.14 * Math.sin(time * 4);
-        circle(c, p.x, y, 24, mission ? BLUE : ORANGE);
-        c.restore();
-      }
+      this.makeLamp(p.x, p.y + 51, shot);
+      // Three tiny route markers lead toward an illuminated entrance.
+      for (let i = 0; i < 3; i++)
+        this.makeLamp(
+          p.x + (298 - p.x) * i * 0.08,
+          p.y + 77 + i * 18,
+          shot,
+          undefined,
+          4,
+        );
     }
-    for (let i = 0; i < 3; i++)
-      lamp(c, 274 + i * 24, 236, i < e.locks, BLUE, 5);
-    MODE_ORDER.forEach((m, i) =>
-      lamp(c, 226 + i * 45, 671, e.completed.has(m), BLUE, 8),
+    // Plunger assembly: spring around its guide rod, behind the ball.
+    this.pipe(
+      [V(557, 891, 12), V(557, 954, 12)],
+      3,
+      this.chrome,
+      this.fixed,
+      1,
     );
-    lamp(c, 292, 751, e.saveUntil > e.clock && e.phase === "playing", BLUE, 8);
-    TARGETS.forEach((p, i) => {
-      if (e.targetBank[i]) {
-        c.fillStyle = BLUE;
-        c.fillRect(p.x - 15, p.y - 10, 30, 9);
-        text(c, ["I", "II", "III"][i], p.x, p.y - 2, 8, INK, 0);
+    const spring: THREE.Vector3[] = [];
+    for (let i = 0; i <= 160; i++)
+      spring.push(
+        V(
+          557 + Math.cos(i * 0.6) * 6,
+          910 + i * 0.23,
+          12 + Math.sin(i * 0.6) * 6,
+        ),
+      );
+    this.pipe(spring, 1.1, this.chrome, this.fixed, 160);
+    this.box(557, 955, 12, 30, 12, 19, this.brass);
+  }
+  private makeLamp(
+    x: number,
+    y: number,
+    shot?: ShotId,
+    mode?: number,
+    radius = 10,
+  ) {
+    this.torus(x, y, 1, radius + 2, 1.8, this.brass);
+    const mat = standard("#809486", 0.2, 0.3);
+    mat.emissive.set("#eaa552");
+    let mesh: THREE.Mesh;
+    if (shot && radius === 10) {
+      const arrow = new THREE.Shape();
+      arrow.moveTo(0, 13);
+      arrow.lineTo(-9, -1);
+      arrow.lineTo(-4, -1);
+      arrow.lineTo(-4, -11);
+      arrow.lineTo(4, -11);
+      arrow.lineTo(4, -1);
+      arrow.lineTo(9, -1);
+      arrow.closePath();
+      mesh = this.mesh(
+        new THREE.ShapeGeometry(arrow),
+        mat,
+        V(x, y, 1.8),
+        this.scene,
+      );
+      mesh.rotation.x = -Math.PI / 2;
+    } else mesh = this.cylinder(x, y, 1.5, radius, 1.8, mat, this.scene);
+    mesh.castShadow = false;
+    this.lamps.push({ mesh, mat, shot, mode });
+    return mesh;
+  }
+  private buildMechanisms() {
+    for (const shot of ["harvest", "dune"] as const) this.buildRamp(shot);
+    for (const p of BUMPERS) {
+      this.cylinder(p.x, p.y, 5, 31, 10, this.rubber);
+      this.cylinder(p.x, p.y, 13, 26, 14, this.chrome);
+      this.torus(p.x, p.y, 18, 27, 3, this.bone);
+      const g = new THREE.Group();
+      g.position.copy(V(p.x, p.y));
+      this.scene.add(g);
+      this.mesh(
+        new THREE.CylinderGeometry(28, 29, 10, 32),
+        this.orange,
+        new THREE.Vector3(0, 28, 0),
+        g,
+      );
+      this.mesh(
+        new THREE.CylinderGeometry(20, 23, 5, 32),
+        this.brass,
+        new THREE.Vector3(0, 35, 0),
+        g,
+      );
+      this.mesh(
+        new THREE.SphereGeometry(14, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+        this.bone,
+        new THREE.Vector3(0, 37, 0),
+        g,
+      );
+      this.bumpers.push(g);
+    }
+    for (const [i, p] of TARGETS.entries()) {
+      this.box(p.x, p.y, 0.8, 38, 16, 2, this.black);
+      const g = new THREE.Group();
+      g.position.copy(V(p.x, p.y));
+      this.scene.add(g);
+      this.mesh(
+        new THREE.BoxGeometry(28, 24, 8),
+        this.chrome,
+        new THREE.Vector3(0, 12, 0),
+        g,
+      );
+      this.mesh(
+        new THREE.BoxGeometry(22, 14, 1),
+        this.blue,
+        new THREE.Vector3(0, 16, 4.6),
+        g,
+      );
+      this.mesh(
+        new THREE.BoxGeometry(3, 7 + i * 2, 1),
+        this.bone,
+        new THREE.Vector3(0, 16, 5.2),
+        g,
+      );
+      this.targets.push(g);
+    }
+    SLINGS.forEach((points) => {
+      const shape = new THREE.Shape();
+      points.forEach((p, i) =>
+        i
+          ? shape.lineTo(p.x - 300, -(p.y - 500))
+          : shape.moveTo(p.x - 300, -(p.y - 500)),
+      );
+      shape.closePath();
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: 12,
+        bevelEnabled: true,
+        bevelSize: 2,
+        bevelThickness: 2,
+        bevelSegments: 1,
+        steps: 1,
+      });
+      const m = this.mesh(geo, this.blue, new THREE.Vector3(0, 7, 0));
+      m.rotation.x = -Math.PI / 2;
+      this.pipe(
+        [...points, points[0]].map((p) => V(p.x, p.y, 9)),
+        5.5,
+        this.bone,
+        this.fixed,
+        3,
+      );
+      for (const p of points) {
+        this.cylinder(p.x, p.y, 13, 8, 26, this.chrome);
+        this.screw(p.x, p.y, 27);
       }
     });
-    // A pressed bumper cap moves with its skirt; each physical impact has a visual reply.
-    BUMPERS.forEach((p, i) => {
-      const impact = e.flashes.findLast((f) => f.x === p.x && f.y === p.y);
-      if (!impact) return;
-      const recoil = Math.max(0, 1 - (e.clock - impact.time) / 0.28);
-      if (!recoil) return;
-      circle(c, p.x, p.y - 7, 26, "#102c3a", BLUE, 1);
-      const offset = settings.reducedMotion
-        ? 0
-        : Math.sin(recoil * Math.PI) * 4;
-      circle(
-        c,
-        p.x,
-        p.y - 7 + offset,
-        23,
-        i === 2 ? "#4194a2" : "#f4a465",
-        BONE,
-        2,
+    for (const side of [0, 1]) {
+      const g = new THREE.Group();
+      g.position.copy(V(side ? 400 : 182, 826, 10));
+      this.scene.add(g);
+      const shape = new THREE.Shape();
+      shape.moveTo(0, -12);
+      shape.bezierCurveTo(-19, -12, -19, 12, 0, 12);
+      shape.lineTo(91, 7);
+      shape.bezierCurveTo(103, 7, 103, -7, 91, -7);
+      shape.closePath();
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: 12,
+        bevelEnabled: true,
+        bevelSize: 2,
+        bevelThickness: 2,
+        bevelSegments: 2,
+      });
+      const base = this.mesh(geo, this.orange, new THREE.Vector3(0, -6, 0), g);
+      base.rotation.x = -Math.PI / 2;
+      const top = this.mesh(
+        geo.clone(),
+        this.bone,
+        new THREE.Vector3(0, 9, 0),
+        g,
       );
-      circle(c, p.x, p.y - 7 + offset, 16, "transparent", BONE, 1);
-      text(c, "✦", p.x, p.y + 1 + offset, 25, BONE, 0);
-    });
-    if (e.combo > 1 && !e.tilted) {
-      const remaining = Math.max(0, (e.comboUntil - e.clock) / 4);
-      c.save();
-      c.fillStyle = "#123543";
-      c.beginPath();
-      c.roundRect(243, 634, 103, 23, 11);
-      c.fill();
-      text(c, `${e.combo}× FLOW`, 295, 649, 11, BONE, 1.4);
-      line(
-        c,
+      top.rotation.x = -Math.PI / 2;
+      top.scale.set(0.94, 0.7, 0.2);
+      this.mesh(
+        new THREE.CylinderGeometry(6, 6, 3, 16),
+        this.brass,
+        new THREE.Vector3(0, 13, 0),
+        g,
+      );
+      this.flippers.push(g);
+    }
+    // Orbit spinners rotate only when a ball actually traverses their lane.
+    for (const x of [82, 507]) {
+      this.pipe(
         [
-          { x: 255, y: 655 },
-          { x: 255 + 79 * remaining, y: 655 },
+          V(x - 19, 393),
+          V(x - 19, 393, 34),
+          V(x + 19, 393, 34),
+          V(x + 19, 393),
         ],
-        BLUE,
         2,
+        this.chrome,
+        this.fixed,
+        3,
       );
-      c.restore();
+      const g = new THREE.Group();
+      g.position.copy(V(x, 393, 27));
+      this.scene.add(g);
+      this.mesh(
+        new THREE.BoxGeometry(24, 21, 2),
+        this.brass,
+        new THREE.Vector3(),
+        g,
+      );
+      this.mesh(
+        new THREE.BoxGeometry(14, 12, 2.4),
+        this.blue,
+        new THREE.Vector3(),
+        g,
+      );
+      this.spinners.push(g);
     }
-    this.flipper(c, e.left);
-    this.flipper(c, e.right);
-    // Impact rings and a restrained sparkle around hits.
-    for (const f of e.flashes) {
-      const age = (e.clock - f.time) / 0.55;
-      if (settings.reducedMotion) continue;
-      c.save();
-      c.globalAlpha = (1 - age) * 0.75;
-      c.strokeStyle = f.color;
-      c.lineWidth = 2;
-      c.beginPath();
-      c.arc(f.x, f.y, 10 + age * 45, 0, Math.PI * 2);
-      c.stroke();
-      c.restore();
+    this.buildWorm();
+    this.buildHarvester();
+    // Visible insert rings are impact feedback, never full-screen flashes.
+    for (let i = 0; i < 12; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: "#ffe6ac",
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const m = this.mesh(
+        new THREE.RingGeometry(13, 17, 32),
+        mat,
+        V(300, 400, 2),
+        this.scene,
+      );
+      m.rotation.x = -Math.PI / 2;
+      m.castShadow = false;
+      this.pulse.push(m);
     }
-    for (const b of e.balls) {
-      if (settings.ballTrail && !settings.reducedMotion && !b.waiting) {
-        b.trail.forEach((p, i) => {
-          c.globalAlpha = (1 - i / 12) * 0.16;
-          circle(c, p.x, p.y, Math.max(1, 8 - i * 0.5), "#e3f5df");
-        });
-        c.globalAlpha = 1;
+  }
+  private buildRamp(shot: "harvest" | "dune") {
+    const path = RAMP_PATHS[shot];
+    const sample = (t: number, offset = 0, lift = 0) => {
+      const p = pathPoint(path, t),
+        p2 = pathPoint(path, Math.min(1, t + 0.002)),
+        p0 = pathPoint(path, Math.max(0, t - 0.002));
+      const dx = p2.x - p0.x,
+        dy = p2.y - p0.y,
+        d = Math.hypot(dx, dy) || 1;
+      return V(
+        p.x - (dy / d) * offset,
+        p.y + (dx / d) * offset,
+        rampHeight(t) + lift,
+      );
+    };
+    for (const offset of [-17, -7, 7, 17]) {
+      const points = Array.from({ length: 161 }, (_, i) =>
+        sample(i / 160, offset, Math.abs(offset) === 17 ? 13 : 1),
+      );
+      this.pipe(
+        points,
+        Math.abs(offset) === 17 ? 2.7 : 2.2,
+        this.chrome,
+        this.fixed,
+        160,
+      );
+    }
+    // Open wire return: cross ties and slender stanchions show height over the orbit.
+    for (let i = 2; i <= 29; i++) {
+      const t = i / 31;
+      this.pipe(
+        [
+          sample(t, -17, 12),
+          sample(t, -17, 0),
+          sample(t, 17, 0),
+          sample(t, 17, 12),
+        ],
+        1.7,
+        this.chrome,
+        this.fixed,
+        3,
+      );
+      if (i % 5 === 0 && t < 0.86) {
+        const at = sample(t, 22),
+          foot = at.clone();
+        foot.y = 0;
+        this.pipe(
+          [foot, at.clone().add(new THREE.Vector3(0, 13, 0))],
+          3,
+          this.brass,
+          this.fixed,
+          1,
+        );
       }
-      const lift = b.path ? 5 : 0;
-      c.save();
-      c.shadowColor = "#020a10";
-      c.shadowBlur = 8;
-      circle(c, b.x + 5 + lift, b.y + 7 + lift, 10, "rgba(0,7,15,.5)");
-      c.restore();
-      const metal = c.createRadialGradient(
-        b.x - 3,
-        b.y - 4,
-        1,
-        b.x + 1,
-        b.y + 2,
-        12,
-      );
-      metal.addColorStop(0, "#ffffff");
-      metal.addColorStop(0.25, "#e0f0ee");
-      metal.addColorStop(0.43, "#86b4c8");
-      metal.addColorStop(0.5, "#244458");
-      metal.addColorStop(0.68, "#ccbb9b");
-      metal.addColorStop(1, "#203b4c");
-      circle(c, b.x, b.y, 10, metal, "#eaf4d9", 0.8);
-      circle(c, b.x - 3, b.y - 4, 2.7, "#fffef1");
     }
-    if (e.charging) {
-      c.save();
-      c.strokeStyle = ORANGE;
-      c.lineWidth = 4;
-      c.beginPath();
-      c.arc(558, 887, 16, -Math.PI / 2, -Math.PI / 2 + e.charge * Math.PI * 2);
-      c.stroke();
-      c.restore();
+    // Only the ascending entry is transparent acrylic. No opaque blue ribbon.
+    const vertices: number[] = [],
+      indices: number[] = [];
+    for (let i = 0; i <= 40; i++) {
+      for (const side of [-1, 1]) {
+        const p = sample((i / 40) * 0.38, side * 16, -0.5);
+        vertices.push(p.x, p.y, p.z);
+      }
+      if (i < 40) {
+        const n = i * 2;
+        indices.push(n, n + 1, n + 2, n + 1, n + 3, n + 2);
+      }
     }
-    // Articulated three-part jaws open on a lock; multiball keeps the throat alive.
-    const captive = e.balls.some(
-      (b) => b.path && b.path.points[0].x === 298 && b.path.points[0].y === 177,
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    const acrylic = new THREE.MeshStandardMaterial({
+      color: "#82aec0",
+      metalness: 0.2,
+      roughness: 0.15,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ramp = this.mesh(geo, acrylic, new THREE.Vector3());
+    ramp.castShadow = false;
+    const gate = new THREE.Group();
+    gate.position.copy(sample(0.025, 0, 21));
+    this.scene.add(gate);
+    this.mesh(
+      new THREE.BoxGeometry(30, 17, 2),
+      this.brass,
+      new THREE.Vector3(0, -9, 0),
+      gate,
     );
-    if (captive || e.mode === "multiball" || e.mode === "wizard") {
-      c.save();
-      const breath = settings.reducedMotion
-        ? 0.5
-        : 0.5 + Math.sin(time * (captive ? 12 : 3)) * 0.5;
-      circle(c, 298, 162, 32, "#071b2b", ORANGE, 2);
-      c.shadowColor = ORANGE;
-      c.shadowBlur = 14;
-      for (let jaw = 0; jaw < 3; jaw++) {
-        const a = (jaw * Math.PI * 2) / 3 - Math.PI / 2;
-        c.beginPath();
-        c.arc(298, 162, 27 + breath * 3, a, a + 1.7);
-        c.strokeStyle = "#f3c78f";
-        c.lineWidth = 4;
-        c.stroke();
-        for (let tooth = 0; tooth < 5; tooth++) {
-          const angle = a + tooth * 0.34;
-          line(
-            c,
-            [
-              {
-                x: 298 + Math.cos(angle) * (27 + breath * 3),
-                y: 162 + Math.sin(angle) * (27 + breath * 3),
-              },
-              {
-                x: 298 + Math.cos(angle + 0.02) * (17 + breath * 5),
-                y: 162 + Math.sin(angle + 0.02) * (17 + breath * 5),
-              },
-            ],
-            BONE,
-            1.5,
-          );
-        }
+    this.gates.push(gate);
+    for (let i = 0; i < 12; i++) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: "#f5be72",
+        transparent: true,
+        opacity: 0.08,
+      });
+      const m = this.mesh(
+        new THREE.SphereGeometry(3.2, 8, 6),
+        mat,
+        sample(0.08 + i * 0.07, -19, 15),
+        this.scene,
+      );
+      m.castShadow = false;
+      this.routeLights.push({ mesh: m, shot, t: 0.08 + i * 0.07 });
+    }
+  }
+  private buildWorm() {
+    // The scoop is a real dark opening with a ringed, rising worm above it.
+    this.cylinder(298, 170, 0.6, 30, 1, this.black);
+    this.torus(298, 170, 3, 32, 4, this.brass);
+    this.worm.position.copy(V(298, 147, 6));
+    this.scene.add(this.worm);
+    for (let i = 0; i < 8; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(22 + i * 1.3, 4.1, 7, 32),
+        i % 3 ? this.brass : this.orange,
+      );
+      ring.rotation.x = -Math.PI / 2 + 0.1 * i;
+      ring.position.set(0, 7 + i * 5, -i * 2.6);
+      ring.castShadow = true;
+      this.worm.add(ring);
+    }
+    const mouth = this.mesh(
+      new THREE.CircleGeometry(31, 40),
+      new THREE.MeshBasicMaterial({ color: "#080908" }),
+      new THREE.Vector3(0, 44, -17),
+      this.worm,
+    );
+    mouth.rotation.x = -0.87;
+    for (let i = 0; i < 26; i++) {
+      const a = (i * Math.PI * 2) / 26;
+      const radial = new THREE.Vector3(
+        Math.cos(a),
+        Math.sin(a) * Math.cos(0.87),
+        -Math.sin(a) * Math.sin(0.87),
+      );
+      const tooth = this.mesh(
+        new THREE.ConeGeometry(2.2, 12, 5),
+        this.bone,
+        radial
+          .clone()
+          .multiplyScalar(27)
+          .add(new THREE.Vector3(0, 45, -16)),
+        this.worm,
+      );
+      tooth.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        radial.negate(),
+      );
+    }
+    // Tower silhouettes live outside the main shooting fan, not invisible obstacles.
+    for (const side of [0, 1])
+      for (let i = 0; i < 3; i++) {
+        const x = side ? 550 : 39,
+          y = 145 + i * 45,
+          h = 55 + i * 17;
+        const rock = this.mesh(
+          new THREE.CylinderGeometry(8, 14, h, 5),
+          i % 2 ? this.orange : this.blue,
+          V(x, y, h / 2),
+        );
+        rock.rotation.z = (i - 1) * 0.09;
+        this.box(x, y + 9, h * 0.69, 3, 2, 9, this.bone);
       }
-      c.restore();
+  }
+  private buildHarvester() {
+    this.harvester.position.copy(V(390, 89, 108));
+    this.scene.add(this.harvester);
+    this.mesh(
+      new THREE.BoxGeometry(57, 17, 37),
+      this.bone,
+      new THREE.Vector3(),
+      this.harvester,
+    );
+    this.mesh(
+      new THREE.BoxGeometry(24, 15, 22),
+      this.blue,
+      new THREE.Vector3(5, 14, -2),
+      this.harvester,
+    );
+    for (const x of [-26, 26])
+      for (const z of [-14, 14]) {
+        const wheel = this.mesh(
+          new THREE.CylinderGeometry(9, 9, 8, 12),
+          this.rubber,
+          new THREE.Vector3(x, -9, z),
+          this.harvester,
+        );
+        wheel.rotation.z = Math.PI / 2;
+      }
+    for (const z of [-9, 0, 9])
+      this.mesh(
+        new THREE.BoxGeometry(20, 4, 3),
+        this.brass,
+        new THREE.Vector3(-35, 0, z),
+        this.harvester,
+      );
+    this.box(390, 89, 77, 82, 55, 3, this.black);
+    for (const x of [359, 421]) this.cylinder(x, 89, 38, 3, 76, this.chrome);
+  }
+  /** Merge stationary metalwork by material: hundreds of modeled parts, few draw calls. */
+  private batchStaticGeometry(group = this.fixed) {
+    group.updateMatrixWorld(true);
+    const inverse = group.matrixWorld.clone().invert();
+    const buckets = new Map<
+      THREE.Material,
+      { geometry: THREE.BufferGeometry[]; cast: boolean; receive: boolean }
+    >();
+    const originals: THREE.BufferGeometry[] = [];
+    for (const child of [...group.children]) {
+      if (!(child instanceof THREE.Mesh) || Array.isArray(child.material))
+        continue;
+      const geom = child.geometry
+        .clone()
+        .applyMatrix4(inverse.clone().multiply(child.matrixWorld));
+      const bucket = buckets.get(child.material) ?? {
+        geometry: [],
+        cast: child.castShadow,
+        receive: child.receiveShadow,
+      };
+      bucket.geometry.push(geom);
+      buckets.set(child.material, bucket);
+      originals.push(child.geometry);
+      group.remove(child);
     }
-    if (e.tilted) {
-      c.fillStyle = "rgba(2,18,29,.45)";
-      c.fillRect(0, 0, 600, 1000);
-      text(c, "T I L T", 300, 560, 40, BONE, 2);
+    for (const [material, bucket] of buckets) {
+      const expanded = bucket.geometry.map((g) =>
+        g.index ? g.toNonIndexed() : g,
+      );
+      const merged = mergeGeometries(expanded);
+      if (merged) {
+        const m = new THREE.Mesh(merged, material);
+        m.castShadow = bucket.cast;
+        m.receiveShadow = bucket.receive;
+        group.add(m);
+      }
+      expanded.forEach((g) => g.dispose());
+      bucket.geometry.forEach((g) => g.dispose());
     }
-    // Glass edge reflection stays away from the playable center.
-    const glass = c.createLinearGradient(0, 0, 600, 400);
-    glass.addColorStop(0, "rgba(232,247,245,.09)");
-    glass.addColorStop(0.25, "rgba(255,255,255,0)");
-    glass.addColorStop(1, "rgba(255,255,255,0)");
-    c.fillStyle = glass;
-    c.fillRect(24, 24, 552, 950);
+    originals.forEach((g) => g.dispose());
+  }
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    this.renderer.setSize(rect.width, rect.height, false);
+    this.camera.aspect = rect.width / rect.height;
+    // Cabinet view with enough tilt to reveal raised ramps without hiding the fan.
+    this.camera.position.set(0, 2050, 560);
+    this.camera.lookAt(0, 0, 0);
+    this.camera.updateMatrixWorld();
+    this.camera.updateProjectionMatrix();
+    // Fit all table corners in NDC; responsive without cropping the launch lane.
+    for (let i = 0; i < 3; i++) {
+      let extent = 0;
+      for (const x of [-310, 310])
+        for (const z of [-510, 515])
+          for (const y of [0, 70]) {
+            const p = new THREE.Vector3(x, y, z).project(this.camera);
+            extent = Math.max(
+              extent,
+              Math.abs(p.x) / 0.98,
+              Math.abs(p.y) / 0.975,
+            );
+          }
+      this.camera.position.multiplyScalar(extent);
+      this.camera.lookAt(0, 0, 0);
+      this.camera.updateMatrixWorld();
+    }
+  }
+  draw(e: PinballEngine, settings: GameSettings, now: number) {
+    if (this.disposed || this.renderer.getContext().isContextLost()) return;
+    const frameTime = now - this.last || 0.016;
+    const dt = Math.min(0.05, frameTime);
+    this.last = now;
+    // Sustained slow hardware gets a lower raster resolution, not slower physics.
+    if (!this.qualityReduced && frameTime > 0.033 && frameTime < 0.5)
+      this.slowFrames++;
+    else this.slowFrames = Math.max(0, this.slowFrames - 0.2);
+    if (this.slowFrames > 45 && !this.qualityReduced) {
+      this.qualityReduced = true;
+      this.renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
+      this.resize();
+      this.canvas.dataset.quality = "balanced";
+    }
+    for (const [i, f] of [e.left, e.right].entries())
+      this.flippers[i].rotation.y = -f.angle;
+    this.bumpers.forEach((g, i) => {
+      const p = BUMPERS[i],
+        flash = e.flashes.findLast((f) => f.x === p.x && f.y === p.y);
+      const t = flash ? Math.max(0, 1 - (e.clock - flash.time) / 0.16) : 0;
+      g.position.y = -5 * t;
+    });
+    this.targets.forEach((g, i) => {
+      g.position.y = THREE.MathUtils.damp(
+        g.position.y,
+        e.targetBank[i] ? -25 : 0,
+        24,
+        dt,
+      );
+    });
+    const scoop = e.balls.some((b) => b.path?.kind === "scoop");
+    const wormHeight = this.worm.position.y;
+    this.worm.position.y = THREE.MathUtils.damp(
+      wormHeight,
+      scoop ? 33 : 6,
+      8,
+      dt,
+    );
+    if (Math.abs(wormHeight - this.worm.position.y) > 0.4)
+      this.renderer.shadowMap.needsUpdate = true;
+    this.harvester.rotation.y = settings.reducedMotion
+      ? 0
+      : Math.sin(e.clock * 0.55) * 0.035;
+    this.harvester.position.y =
+      108 +
+      (e.balls.some((b) => b.path?.shot === "harvest") &&
+      !settings.reducedMotion
+        ? Math.sin(e.clock * 40) * 1.4
+        : 0);
+    for (let i = 0; i < 2; i++) {
+      const shot = i ? "dune" : "harvest";
+      const b = e.balls.find(
+        (b) => b.path?.shot === shot && b.path.elapsed < 0.23,
+      );
+      this.gates[i].rotation.x = THREE.MathUtils.damp(
+        this.gates[i].rotation.x,
+        b ? -1.4 : 0,
+        22,
+        dt,
+      );
+      const orbit = e.balls.some(
+        (b) =>
+          b.path?.shot === (i ? "storm" : "caravan") && b.path.elapsed < 0.4,
+      );
+      if (orbit) this.spinnerAngles[i] = 24;
+      this.spinners[i].rotation.x += this.spinnerAngles[i] * dt;
+      this.spinnerAngles[i] *= Math.exp(-dt * 2.2);
+    }
+    for (const lamp of this.lamps) {
+      const selected = lamp.shot === SHOT_ORDER[e.prescienceIndex];
+      const mode =
+        lamp.shot &&
+        e.mode &&
+        MODE_ORDER.includes(e.mode as (typeof MODE_ORDER)[number]) &&
+        modeTarget(
+          e.mode as (typeof MODE_ORDER)[number],
+          lamp.shot,
+          SHOT_ORDER[e.prescienceIndex],
+        );
+      const completed =
+        lamp.mode !== undefined && e.completed.has(MODE_ORDER[lamp.mode]);
+      const activeMode =
+        lamp.mode !== undefined && e.mode === MODE_ORDER[lamp.mode];
+      const locked =
+        lamp.lock !== undefined &&
+        (lamp.lock < e.locks || e.mode === "multiball");
+      const saved = lamp.save && e.saveUntil > e.clock;
+      const bright =
+        !e.tilted &&
+        (selected || mode || completed || activeMode || locked || saved);
+      lamp.mat.color.set(bright ? "#9f7951" : "#23343a");
+      lamp.mat.emissive.set(
+        mode || activeMode || saved ? "#70c5f6" : "#e88d2c",
+      );
+      lamp.mat.emissiveIntensity = bright
+        ? settings.reducedMotion || completed
+          ? 1.2
+          : 0.8 + Math.sin(now * 6) * 0.35
+        : 0.035;
+    }
+    for (const light of this.routeLights) {
+      const ball = e.balls.find((b) => b.path?.shot === light.shot);
+      const p = ball?.path ? ball.path.elapsed / ball.path.duration : -1;
+      (light.mesh.material as THREE.MeshBasicMaterial).opacity =
+        p >= 0 && Math.abs(p - light.t) < 0.15 ? 1 : 0.08;
+    }
+    const ids = new Set(e.balls.map((b) => b.id));
+    for (const [id, item] of this.balls)
+      if (!ids.has(id)) {
+        for (const obj of [item.ball, item.shadow, item.trail]) {
+          this.scene.remove(obj);
+          obj.geometry.dispose();
+        }
+        (item.shadow.material as THREE.Material).dispose();
+        (item.trail.material as THREE.Material).dispose();
+        this.balls.delete(id);
+      }
+    for (const b of e.balls) {
+      let item = this.balls.get(b.id);
+      if (!item) {
+        const ball = this.mesh(
+          new THREE.SphereGeometry(10, 24, 18),
+          this.steel,
+          V(b.x, b.y, 10),
+          this.scene,
+        );
+        ball.castShadow = false; // A height-aware contact shadow below follows every frame.
+        const shadow = this.mesh(
+          new THREE.CircleGeometry(12, 24),
+          new THREE.MeshBasicMaterial({
+            color: "#080a0e",
+            transparent: true,
+            opacity: 0.28,
+            depthWrite: false,
+          }),
+          V(b.x, b.y, 0.9),
+          this.scene,
+        );
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.castShadow = false;
+        const trail = new THREE.Line(
+          new THREE.BufferGeometry().setAttribute(
+            "position",
+            new THREE.BufferAttribute(new Float32Array(18), 3).setUsage(
+              THREE.DynamicDrawUsage,
+            ),
+          ),
+          new THREE.LineBasicMaterial({
+            color: "#e5f2ec",
+            transparent: true,
+            opacity: 0.22,
+          }),
+        );
+        trail.frustumCulled = false;
+        trail.geometry.setDrawRange(0, 0);
+        this.scene.add(trail);
+        item = { ball, shadow, trail };
+        this.balls.set(b.id, item);
+      }
+      const h = ballHeight(b);
+      item.ball.position.copy(V(b.x, b.y, h));
+      item.ball.rotation.x += (b.vy * dt) / 10;
+      item.ball.rotation.z -= (b.vx * dt) / 10;
+      item.shadow.position.copy(
+        V(
+          b.x + Math.max(0, h - 10) * 0.17,
+          b.y + Math.max(0, h - 10) * 0.18,
+          0.8,
+        ),
+      );
+      item.shadow.scale.setScalar(1 + Math.max(0, h - 10) / 80);
+      (item.shadow.material as THREE.MeshBasicMaterial).opacity = Math.max(
+        0.08,
+        0.28 - h / 700,
+      );
+      item.shadow.visible = h >= 0;
+      item.trail.visible =
+        settings.ballTrail && !settings.reducedMotion && !b.waiting && !b.path;
+      if (item.trail.visible) {
+        const positions = item.trail.geometry.getAttribute(
+          "position",
+        ) as THREE.BufferAttribute;
+        const count = Math.min(6, b.trail.length);
+        for (let i = 0; i < count; i++) {
+          const p = b.trail[b.trail.length - count + i];
+          positions.setXYZ(i, p.x - 300, 10, p.y - 500);
+        }
+        positions.needsUpdate = true;
+        item.trail.geometry.setDrawRange(0, count);
+      }
+    }
+    this.pulse.forEach((m, i) => {
+      const f = e.flashes[i];
+      m.visible = !!f && !settings.reducedMotion;
+      if (!f) return;
+      const t = (e.clock - f.time) / 0.55;
+      m.position.copy(V(f.x, f.y, 2));
+      m.scale.setScalar(1 + t * 2.4);
+      (m.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.5;
+    });
+    this.keyLight.intensity =
+      e.mode === "multiball" || e.mode === "wizard" ? 1.8 : 2.6;
+    this.renderer.render(this.scene, this.camera);
+    this.canvas.dataset.route =
+      e.balls.find((b) => b.path?.kind === "ramp")?.path?.shot ?? "ground";
+    this.canvas.dataset.drawcalls = String(this.renderer.info.render.calls);
   }
   destroy() {
     this.disposed = true;
-    this.art.onload = null;
+    const materials = new Set<THREE.Material>();
+    this.scene.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
+        o.geometry.dispose();
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) =>
+          materials.add(m),
+        );
+      }
+    });
+    materials.forEach((m) => m.dispose());
+    this.textures.forEach((t) => t.dispose());
+    this.environment.dispose();
+    this.renderer.dispose();
   }
 }

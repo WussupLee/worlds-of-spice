@@ -9,6 +9,10 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
+    launchOptions:
+      process.platform === "win32"
+        ? { args: ["--enable-gpu", "--use-angle=d3d11"] }
+        : {},
     baseURL: "http://127.0.0.1:4173/worlds-of-spice/",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -27,6 +31,9 @@ export default defineConfig({
       },
     },
     { name: "android-chromium", use: { ...devices["Pixel 7"] } },
-    { name: "iphone-webkit", use: { ...devices["iPhone 13"] } },
+    {
+      name: "iphone-webkit",
+      use: { ...devices["iPhone 13"], launchOptions: {} },
+    },
   ],
 });

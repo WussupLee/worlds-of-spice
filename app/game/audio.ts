@@ -17,6 +17,8 @@ export class CabinetAudio {
   private enabled = false;
   private disposed = false;
   private lastCue = new Map<Cue, number>();
+  private previewTimer?: ReturnType<typeof setTimeout>;
+  private previewing = false;
   constructor(private settings: GameSettings) {}
   unlock() {
     if (this.disposed) return;
@@ -54,7 +56,7 @@ export class CabinetAudio {
     this.noise = c.createBuffer(1, c.sampleRate * 3, c.sampleRate);
     const data = this.noise.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-    this.music = new Audio("./audio/desert-theme.mp3");
+    this.music = new Audio("./audio/shadows-and-dust.mp3");
     this.music.loop = true;
     this.music.preload = "auto";
     c.createMediaElementSource(this.music).connect(this.musicGain);
@@ -107,7 +109,7 @@ export class CabinetAudio {
     const t = this.context.currentTime,
       mute = settings.muted ? 0 : 1;
     this.fx?.gain.setTargetAtTime(
-      settings.effectsVolume * 0.48 * mute,
+      settings.effectsVolume * 0.92 * mute,
       t,
       0.035,
     );
@@ -123,6 +125,8 @@ export class CabinetAudio {
       void this.music.play().catch(() => undefined);
   }
   active(active: boolean) {
+    clearTimeout(this.previewTimer);
+    this.previewing = false;
     this.enabled = active;
     if (active) this.unlock();
     else {
@@ -130,12 +134,31 @@ export class CabinetAudio {
       void this.context?.suspend().catch(() => undefined);
     }
   }
-  rolling(speed: number, x: number) {
+  /** A short, user-triggered audition while the game is safely paused. */
+  preview() {
+    if (this.disposed) return;
+    clearTimeout(this.previewTimer);
+    this.enabled = true;
+    this.previewing = true;
+    this.unlock();
+    if (!this.context) return;
+    this.play({ cue: "flipper", x: 170, strength: 1 });
+    this.tone(415, 0.11, 0.2, "sine", 205, 0.35, 0.25);
+    this.tone(130, 0.07, 0.22, "triangle", 60, -0.35, 0.55);
+    this.previewTimer = setTimeout(() => {
+      if (this.previewing) this.active(false);
+    }, 6500);
+  }
+  rolling(speed: number, x: number, metal = false) {
     if (!this.context || !this.rollGain) return;
     const t = this.context.currentTime;
-    this.rollGain.gain.setTargetAtTime(Math.min(0.095, speed / 10000), t, 0.09);
+    this.rollGain.gain.setTargetAtTime(
+      Math.min(metal ? 0.16 : 0.095, speed / 8000),
+      t,
+      0.06,
+    );
     this.rollFilter?.frequency.setTargetAtTime(
-      140 + Math.min(1000, speed),
+      (metal ? 1100 : 140) + Math.min(1000, speed),
       t,
       0.1,
     );
@@ -156,6 +179,16 @@ export class CabinetAudio {
     if (t - (this.lastCue.get(cue) ?? -1) < interval || this.voices > 14)
       return;
     this.lastCue.set(cue, t);
+    // Briefly make room for the physical action without turning the score off.
+    if (
+      ["flipper", "bumper", "sling", "launch", "drain"].includes(cue) &&
+      this.musicGain
+    ) {
+      const volume = this.settings.musicVolume * 0.55;
+      this.musicGain.gain.cancelScheduledValues(t);
+      this.musicGain.gain.setTargetAtTime(volume * 0.62, t, 0.012);
+      this.musicGain.gain.setTargetAtTime(volume, t + 0.1, 0.17);
+    }
     const pan = (x - 300) / 430,
       s = Math.min(1, Math.max(0.1, strength));
     const tone = (
@@ -169,36 +202,50 @@ export class CabinetAudio {
     const tick = (f: number, d: number, v: number) =>
       this.tick(f, d, v * s, pan);
     switch (cue) {
+      case "spinner":
+        [0, 0.045, 0.1, 0.18, 0.29].forEach((delay, i) =>
+          tone(1800 - i * 160, 0.025, 0.055, "triangle", 760, delay),
+        );
+        break;
+      case "drop":
+        tick(2000, 0.022, 0.32);
+        tone(190, 0.085, 0.21, "triangle", 65);
+        break;
+      case "scoop":
+        tick(500, 0.16, 0.22);
+        tone(85, 0.5, 0.14, "triangle", 40);
+        tone(280, 0.06, 0.12, "triangle", 120, 0.6);
+        break;
       case "flipper":
-        tone(135, 0.048, 0.21, "triangle", 58);
-        tick(1100, 0.024, 0.13);
+        tone(165, 0.064, 0.3, "triangle", 62);
+        tick(1850, 0.019, 0.31);
         break;
       case "release":
-        tick(650, 0.028, 0.1);
+        tick(1350, 0.033, 0.22);
         break;
       case "rail":
-        tick(1700, 0.036, 0.2);
-        tone(780, 0.024, 0.035, "sine", 390);
+        tick(2200, 0.029, 0.24);
+        tone(970, 0.038, 0.08, "sine", 510);
         break;
       case "launch":
         tone(150, 0.18, 0.24, "triangle", 42);
         tick(650, 0.13, 0.18);
         break;
       case "bumper":
-        tone(300 + x * 0.3, 0.12, 0.17, "sine", 180);
-        tick(1600, 0.045, 0.15);
+        tone(300 + x * 0.3, 0.095, 0.24, "sine", 180);
+        tick(1800, 0.038, 0.28);
         break;
       case "sling":
-        tone(170, 0.055, 0.12, "triangle", 70);
-        tick(1250, 0.055, 0.17);
+        tone(170, 0.065, 0.2, "triangle", 70);
+        tick(1550, 0.043, 0.25);
         break;
       case "shot":
         tone(440, 0.23, 0.1, "sine", 420);
         tone(660, 0.28, 0.045, "sine", 640, 0.06);
         break;
       case "ramp":
-        tick(2600, 0.33, 0.065);
-        tone(293.66, 0.3, 0.08, "sine", 440);
+        tick(2600, 0.42, 0.15);
+        tone(293.66, 0.3, 0.05, "sine", 440);
         break;
       case "save":
         tone(330, 0.2, 0.08);
@@ -300,6 +347,7 @@ export class CabinetAudio {
     };
   }
   destroy() {
+    clearTimeout(this.previewTimer);
     this.disposed = true;
     this.enabled = false;
     this.music?.pause();

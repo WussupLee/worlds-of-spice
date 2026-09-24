@@ -11,9 +11,9 @@ export interface GameSettings {
   ballTrail: boolean;
 }
 export const DEFAULT_SETTINGS: GameSettings = {
-  effectsVolume: 0.48,
-  musicVolume: 0.22,
-  ambienceVolume: 0.3,
+  effectsVolume: 0.82,
+  musicVolume: 0.34,
+  ambienceVolume: 0.24,
   muted: false,
   haptics: true,
   reducedMotion: false,
@@ -39,6 +39,8 @@ export interface GameSnapshot {
   locks: number;
   charge: number;
   activeBalls: number;
+  ramp: "harvest" | "dune" | null;
+  comboSeconds: number;
   multiballComplete: boolean;
   peakMultiplier: number;
 }

@@ -27,7 +27,14 @@ export type Ball = Point & {
   vx: number;
   vy: number;
   waiting: boolean;
-  path?: { points: Point[]; elapsed: number; duration: number; exit: Point };
+  path?: {
+    kind: "ramp" | "orbit" | "scoop" | "launch";
+    shot?: ShotId;
+    points: Point[];
+    elapsed: number;
+    duration: number;
+    exit: Point;
+  };
   trail: Point[];
   cooldown: number;
   stuck: number;
@@ -50,6 +57,9 @@ export type Cue =
   | "multiball"
   | "tilt"
   | "nudge"
+  | "spinner"
+  | "drop"
+  | "scoop"
   | "ui";
 export type GameEvent = { cue: Cue; x: number; strength: number };
 export type Flipper = {
@@ -175,6 +185,24 @@ export function pathPoint(points: Point[], progress: number): Point {
       (2 * p0[k] - 5 * a[k] + 4 * b[k] - p3[k]) * t * t +
       (-p0[k] + 3 * a[k] - 3 * b[k] + p3[k]) * t * t * t);
   return { x: cubic("x"), y: cubic("y") };
+}
+/** Shared by the visible wireform and its constrained ball: no painted-on ramps. */
+export function rampHeight(progress: number) {
+  const t = Math.max(0, Math.min(1, progress));
+  const smooth = (v: number) => v * v * (3 - 2 * v);
+  return t < 0.3
+    ? 92 * smooth(t / 0.3)
+    : t < 0.63
+      ? 92
+      : 92 * (1 - smooth((t - 0.63) / 0.37));
+}
+export function ballHeight(ball: Ball) {
+  if (!ball.path) return BALL_RADIUS;
+  const progress = ball.path.elapsed / ball.path.duration;
+  if (ball.path.kind === "ramp") return BALL_RADIUS + rampHeight(progress);
+  if (ball.path.kind === "scoop")
+    return BALL_RADIUS - 23 * Math.sin(Math.PI * Math.min(1, progress));
+  return BALL_RADIUS;
 }
 export class PinballEngine {
   phase: GamePhase = "ready";
@@ -404,6 +432,7 @@ export class PinballEngine {
       b.y += b.vy * dt;
       if (b.x > 534 && b.y < 190 && b.vy < 0) {
         b.path = {
+          kind: "launch",
           points: [
             { x: b.x, y: b.y },
             { x: 550, y: 119 },
@@ -458,6 +487,8 @@ export class PinballEngine {
         }
       });
       TARGETS.forEach((p, i) => {
+        // A dropped target is below the playfield, not an invisible bumper.
+        if (this.targetBank[i]) return;
         if (
           this.collideRail(b, {
             a: { x: p.x - 15, y: p.y },
@@ -480,7 +511,7 @@ export class PinballEngine {
             }
           }
           this.flash(p.x, p.y, "#8bd5e3");
-          this.emit("shot", p.x, 0.6);
+          this.emit("drop", p.x, 0.8);
         }
       });
       this.collideFlipper(b, this.left);
@@ -672,10 +703,15 @@ export class PinballEngine {
       SHOTS[shot].x,
     );
     this.flash(SHOTS[shot].x, SHOTS[shot].y);
+    if (shot === "caravan" || shot === "storm")
+      this.emit("spinner", SHOTS[shot].x);
+    if (shot === "citadel") this.emit("scoop", SHOTS[shot].x);
     if (b) {
       b.cooldown = this.clock + 1.2;
       if (shot === "harvest" || shot === "dune")
         b.path = {
+          kind: "ramp",
+          shot,
           points: RAMP_PATHS[shot],
           elapsed: 0,
           duration: 1.45,
@@ -683,6 +719,8 @@ export class PinballEngine {
         };
       else if (shot === "citadel")
         b.path = {
+          kind: "scoop",
+          shot,
           points: [
             { x: 298, y: 177 },
             { x: 298, y: 169 },
@@ -691,10 +729,14 @@ export class PinballEngine {
           ],
           elapsed: 0,
           duration: 0.72,
-          exit: { x: 160, y: 240 },
+          // Aim through the gap between the right and middle pop bumpers.
+          // The old soft eject hit the right pop and could repeat the scoop forever.
+          exit: { x: 150, y: 430 },
         };
       else
         b.path = {
+          kind: "orbit",
+          shot,
           points:
             shot === "caravan"
               ? [
@@ -806,6 +848,7 @@ export class PinballEngine {
     this.emit("drain", b.x);
     if (!this.tilted && this.clock < this.saveUntil) {
       this.spawn(true, 558, 885).path = {
+        kind: "launch",
         points: [
           { x: 558, y: 885 },
           { x: 558, y: 520 },
@@ -885,6 +928,10 @@ export class PinballEngine {
       locks: this.locks,
       charge: this.charge,
       activeBalls: this.balls.length,
+      ramp:
+        (this.balls.find((b) => b.path?.kind === "ramp")?.path?.shot as
+          "harvest" | "dune" | undefined) ?? null,
+      comboSeconds: Math.max(0, this.comboUntil - this.clock),
       multiballComplete: this.multiballComplete,
       peakMultiplier: this.peakMultiplier,
     };

@@ -1,10 +1,18 @@
-DESERT SCORE
+CINEMATIC SCORE
+“Shadows and Dust” by Scott Buckley — released under CC-BY 4.0.
+www.scottbuckley.com.au
 
-Title: Desert Theme
-Creator: Tarush Singhal
-Source: https://opengameart.org/content/desert-theme-0
-File: desertvibes.mp3 (renamed desert-theme.mp3)
-License: CC0 1.0 Universal / Public Domain Dedication
-License URL: https://creativecommons.org/publicdomain/zero/1.0/
+Source: https://www.scottbuckley.com.au/library/shadows-and-dust/
+Original MP3: https://www.scottbuckley.com.au/library/wp-content/uploads/2023/11/ShadowsAndDust.mp3
+License: Creative Commons Attribution 4.0 International
+License URL: https://creativecommons.org/licenses/by/4.0/
+Creator's use policy: https://www.scottbuckley.com.au/library/using-this-music/
+Downloaded September 24, 2026. Original duration: 6:48.42.
+Changes: transcoded from 320 kbps to 128 kbps MP3 for mobile delivery; no musical edits.
+Bundled file: shadows-and-dust.mp3. Attribution is also in the game's Credits and audio settings.
 
-Pinball mechanisms, wind, and shifting-sand ambience are synthesized at runtime.
+This is a licensed independent composition, not an official Dune score or recording.
+The track accompanies gameplay; it is not offered as a standalone music service.
+Do not submit this music to audio fingerprinting services or Content ID.
+
+All cabinet mechanisms, rolling steel, wind and shifting-sand effects are original runtime synthesis.
