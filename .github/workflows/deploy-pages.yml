@@ -17,6 +17,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [desktop-chromium, android-chromium, iphone-webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -32,17 +36,19 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm build:pages
       - run: pnpm exec playwright install --with-deps chromium webkit
-      - run: pnpm test:browser
+      - run: pnpm exec playwright test --project=${{ matrix.browser }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: browser-verification
+          name: browser-verification-${{ matrix.browser }}
           path: |
             playwright-report
             test-results
           retention-days: 7
       - uses: actions/configure-pages@v5
+        if: matrix.browser == 'desktop-chromium'
       - uses: actions/upload-pages-artifact@v3
+        if: matrix.browser == 'desktop-chromium'
         with:
           path: dist/client
   deploy:

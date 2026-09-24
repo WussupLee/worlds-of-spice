@@ -275,44 +275,22 @@ test("mechanism output is audible with score and wind turned down", async ({
       createDynamicsCompressor() {
         const node = super.createDynamicsCompressor();
         const w = window as unknown as {
-          __audioPeak: number;
-          __meterReady: boolean;
+          __mechanismAnalyser: AnalyserNode;
         };
-        w.__audioPeak = 0;
-        // Meter on the audio thread: a 20 ms impact must not be missed simply
-        // because a software-rendered WebGL frame takes longer than the sound.
-        const source = `class PeakMeter extends AudioWorkletProcessor {
-          constructor(){super();this.peak=0;this.frames=0;}
-          process(inputs){
-            for(const channel of inputs[0]||[]) for(const value of channel) this.peak=Math.max(this.peak,Math.abs(value));
-            if(++this.frames%32===0){this.port.postMessage(this.peak);this.peak=0;}
-            return true;
-          }
-        } registerProcessor("pinball-test-meter",PeakMeter);`;
-        const url = URL.createObjectURL(
-          new Blob([source], { type: "text/javascript" }),
-        );
-        void this.audioWorklet.addModule(url).then(() => {
-          const meter = new AudioWorkletNode(this, "pinball-test-meter");
-          meter.port.onmessage = (event) => {
-            w.__audioPeak = Math.max(w.__audioPeak, Number(event.data));
-          };
-          node.connect(meter).connect(this.destination); // Its output is silent.
-          w.__meterReady = true;
-          URL.revokeObjectURL(url);
-        });
+        // Keep ~0.7 seconds of actual output, rather than a short window that
+        // can miss a 20 ms impact between slow software-rendered frames.
+        // Native AnalyserNode avoids loading test-only worklets in WebKit.
+        const analyser = this.createAnalyser();
+        analyser.fftSize = 32768;
+        const silentSink = this.createGain();
+        silentSink.gain.value = 0;
+        node.connect(analyser).connect(silentSink).connect(this.destination);
+        w.__mechanismAnalyser = analyser;
         return node;
       }
     };
   });
   await start(page);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as unknown as { __meterReady: boolean }).__meterReady,
-      ),
-    )
-    .toBe(true);
   await page
     .getByRole("button", { name: "Audio and display settings" })
     .click();
@@ -321,16 +299,26 @@ test("mechanism output is audible with score and wind turned down", async ({
     await page.keyboard.press("Home");
   }
   await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.evaluate(() => {
-    (window as unknown as { __audioPeak: number }).__audioPeak = 0;
-  });
+  // Flush music/wind from the analyser history before measuring mechanisms.
+  await page.waitForTimeout(900);
   await page.keyboard.press("ArrowLeft", { delay: 100 });
   const peak = () =>
-    page.evaluate(
-      () => (window as unknown as { __audioPeak: number }).__audioPeak,
-    );
-  await expect.poll(peak).toBeGreaterThan(0.015);
-  expect(await peak()).toBeLessThan(0.98);
+    page.evaluate(() => {
+      const analyser = (
+        window as unknown as { __mechanismAnalyser: AnalyserNode }
+      ).__mechanismAnalyser;
+      const samples = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(samples);
+      return samples.reduce(
+        (maximum, value) => Math.max(maximum, Math.abs(value)),
+        0,
+      );
+    });
+  let measuredPeak = 0;
+  await expect
+    .poll(async () => (measuredPeak = Math.max(measuredPeak, await peak())))
+    .toBeGreaterThan(0.015);
+  expect(measuredPeak).toBeLessThan(0.98);
 });
 
 test("all three mixer settings remain adjustable and persist after reload", async ({
