@@ -1,0 +1,14 @@
+{
+  "name": "Worlds of Spice",
+  "short_name": "Spice Pinball",
+  "description": "A cinematic desert science-fiction pinball odyssey.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07121d",
+  "theme_color": "#0b2440",
+  "icons": [
+    { "src": "./assets/playfield.png", "sizes": "any", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
