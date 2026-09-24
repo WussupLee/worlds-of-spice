@@ -23,6 +23,7 @@ export default function PinballClient() {
     engine = useRef<PinballEngine | null>(null),
     audio = useRef<CabinetAudio | null>(null);
   const settingsRef = useRef(DEFAULT_SETTINGS),
+    graphicsLost = useRef(false),
     recorded = useRef(false),
     modal = useRef<HTMLDialogElement>(null),
     resumeOnClose = useRef(false);
@@ -67,7 +68,7 @@ export default function PinballClient() {
   }, []);
   const pause = useCallback(
     (explicit?: boolean) => {
-      engine.current?.pause(explicit);
+      engine.current?.pause(graphicsLost.current ? true : explicit);
       clearInputs();
       audio.current?.active(engine.current?.phase === "playing");
       publish();
@@ -102,7 +103,10 @@ export default function PinballClient() {
         }
       }
       history = parseScores(localStorage.getItem(SCORES_KEY));
-      if (!localStorage.getItem(SETTINGS_KEY))
+      if (
+        !localStorage.getItem(SETTINGS_KEY) &&
+        !localStorage.getItem("worlds-of-spice:settings:v2")
+      )
         restored.reducedMotion = matchMedia(
           "(prefers-reduced-motion: reduce)",
         ).matches;
@@ -131,6 +135,7 @@ export default function PinballClient() {
     const surface = canvas.current!;
     const lost = (event: Event) => {
       event.preventDefault();
+      graphicsLost.current = true;
       pause(true);
       setError(
         "Graphics interrupted. Reload to restore the cabinet; your best scores are saved.",
@@ -288,6 +293,7 @@ export default function PinballClient() {
   }, [state.phase]);
 
   const start = () => {
+    if (graphicsLost.current) return;
     clearInputs();
     engine.current = new PinballEngine();
     engine.current.start();

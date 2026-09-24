@@ -207,6 +207,34 @@ test("graphics context loss pauses the ball and offers an explicit recovery", as
   await expect(
     page.getByRole("button", { name: "RELOAD TABLE" }),
   ).toBeVisible();
+  await page.keyboard.press("p");
+  await expect(page.locator("canvas")).toHaveAttribute("data-phase", "paused");
+});
+
+test("the audio refresh preserves previous mute and accessibility choices", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "worlds-of-spice:settings:v2",
+      JSON.stringify({
+        muted: true,
+        haptics: false,
+        reducedMotion: true,
+        effectsVolume: 0.48,
+      }),
+    );
+  });
+  await start(page);
+  await page
+    .getByRole("button", { name: "Audio and display settings" })
+    .click();
+  await expect(page.getByLabel("Mute all sound")).toBeChecked();
+  await expect(page.getByLabel("Reduced motion")).toBeChecked();
+  await expect(page.getByLabel("Touch haptics")).not.toBeChecked();
+  await expect(
+    page.getByRole("slider", { name: "Pinball mechanisms" }),
+  ).toHaveValue("82");
 });
 
 test("mechanism output is audible with score and wind turned down", async ({
