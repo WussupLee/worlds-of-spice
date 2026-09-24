@@ -48,6 +48,22 @@ test("complete cabinet fits the viewport and preserves the playfield aspect", as
 test("both flippers work independently; pausing and dialogs release held inputs", async ({
   page,
 }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __cabinetDraws: number };
+    w.__cabinetDraws = 0;
+    for (const method of ["drawElements", "drawArrays"] as const) {
+      const original = WebGL2RenderingContext.prototype[method] as (
+        ...args: number[]
+      ) => void;
+      WebGL2RenderingContext.prototype[method] = function (
+        this: WebGL2RenderingContext,
+        ...args: number[]
+      ) {
+        w.__cabinetDraws++;
+        original.apply(this, args);
+      };
+    }
+  });
   await start(page);
   const canvas = page.locator("canvas");
   await page.keyboard.down("ArrowLeft");
@@ -61,8 +77,17 @@ test("both flippers work independently; pausing and dialogs release held inputs"
   await expect(canvas).toHaveAttribute("data-phase", "paused");
   await expect(canvas).toHaveAttribute("data-right", "false");
   await page.keyboard.up("ArrowRight");
+  const drawCount = () =>
+    page.evaluate(
+      () => (window as unknown as { __cabinetDraws: number }).__cabinetDraws,
+    );
+  const pausedDraws = await drawCount();
+  expect(pausedDraws).toBeGreaterThan(0);
+  await page.waitForTimeout(300);
+  expect(await drawCount()).toBe(pausedDraws);
   await page.getByRole("button", { name: "RETURN TO PLAY" }).click();
   await launch(page);
+  expect(await drawCount()).toBeGreaterThan(pausedDraws);
   await page.getByRole("button", { name: "How to play" }).click();
   await expect(canvas).toHaveAttribute("data-phase", "paused");
   const score = await page.getByTestId("score").textContent();

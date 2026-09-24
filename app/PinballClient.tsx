@@ -131,7 +131,11 @@ export default function PinballClient() {
       );
       return;
     }
-    const resize = new ResizeObserver(() => renderer.resize());
+    let needsRender = true;
+    const resize = new ResizeObserver(() => {
+      renderer.resize();
+      needsRender = true;
+    });
     const surface = canvas.current!;
     const lost = (event: Event) => {
       event.preventDefault();
@@ -148,12 +152,23 @@ export default function PinballClient() {
     let frame = 0,
       last = performance.now(),
       lastUI = 0,
-      lastPhase = "ready";
+      lastPhase = "ready",
+      lastDrawPhase = "";
     const loop = (now: number) => {
       const e = engine.current!;
       e.advance((now - last) / 1000);
       last = now;
-      renderer.draw(e, settingsRef.current, now / 1000);
+      // Freeze the cabinet behind pause/settings instead of spending GPU time
+      // redrawing an unchanged scene. Resizing and resuming still repaint.
+      if (
+        !document.hidden &&
+        !graphicsLost.current &&
+        (e.phase !== "paused" || needsRender || e.phase !== lastDrawPhase)
+      ) {
+        renderer.draw(e, settingsRef.current, now / 1000);
+        needsRender = false;
+        lastDrawPhase = e.phase;
+      }
       for (const ev of e.events.splice(0)) audio.current?.play(ev);
       const rolling = e.balls.filter(
         (b) => !b.waiting && b.path?.kind !== "scoop",
