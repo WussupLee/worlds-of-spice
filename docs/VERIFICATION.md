@@ -2,6 +2,8 @@
 
 ## Automated checks
 
+The latest sound repair supersedes the earlier audio-file verification claim: eight valid WAV containers held silent PCM. The old flipper-only signal check could not detect that. See [the root cause, full event ledger and stronger checks](SOUND-COVERAGE.md).
+
 - `pnpm test`: deterministic engine/rules/storage tests. These cover launch strength, skill-shot qualification, both rising flippers, held energy limits, left/right cradle and release, rail tunneling, pause clocks, one-time ramp capture and return, drop-bank awards, save deadlines, three-ball termination, latched tilt, Oracle progression, combo expiry/cap, multiball completion and finale qualification.
 - Ten seeded three-minute engine simulations use varied flipper input. Each must end normally with three balls consumed, finite coordinates/velocities and no escaped living balls. This caught trapping around sling vertices and return-lane caps in the original build. The 3D overhaul also exposed a repeating scoop eject, corrected by aiming the kickout through the pop-bumper gap.
 - A contact-timing sweep from both flippers verifies that all five major shots are physically reachable as the first major shot. Rules tests alone would not prove that the layout actually lets players reach its objectives.
@@ -58,3 +60,13 @@ CPU-only CI uses one browser worker and action/DOM traces without continuous Web
 - The production preview uses port 4175 and refuses to reuse another server. An initial aborted run found an unrelated project occupying 4173; it was left untouched and does not count as game verification.
 
 The first Linux release run passed every gameplay test and both mobile profiles, but exposed a timing error in the new desktop reverb assertion: multiple automation round trips on a slow software GPU postponed the tail sample until after the room decayed. The revised test triggers the normal flipper input and captures peak and tail in one browser task, anchored to the actual AudioContext source-start time. It holds the flipper to exclude a release sound and requires samples in the 1.2–2.4 second tail window, with unchanged output thresholds. The production audio was not made louder to satisfy the test.
+
+## September 24 complete sound repair
+
+- 70 unit tests pass, including nine actual PCM-signal checks, exhaustive cue coverage, and 22 new engine event-timing/award tests. Existing reachability, lifecycle and physics tests remain unchanged.
+- 49 native Chromium OfflineAudioContext renders pass through the actual CabinetAudio mixer: all 42 cues, the second flipper variant, fallback, mute, effects-off, voice stress and two rolling surfaces. The observed maximum output peak was 0.05924; mute/effects-off were exactly silent. Every intended audible case had nonzero 250–5000 Hz mono content. The normal random pitch variation means exact peaks vary between runs.
+- The production artifact passes 25 applicable local browser cases, with 11 explicitly scoped/unavailable skips. The new audition test covers all nine real recordings and the 42-item public selector on desktop and Android profiles; Windows WebKit lacks Web Audio, so it is skipped there rather than counted as an iPhone audio pass.
+- Real-time flipper signal/tail tests still pass at the unchanged quiet-output bounds. Game over now lets the final drain/phrase decay instead of suspending immediately. User mixer settings, high scores, music and wind defaults are preserved.
+- TypeScript, lint and the static build pass. The complete sound ledger documents Space Cadet's event-timing influences without importing its audio assets.
+
+These are signal, behavior and browser-emulation checks—not a physical phone listening test or a claim of commercial simulator parity.

@@ -23,16 +23,14 @@ for (const [name, id, start, duration] of clips) {
       "error",
       "-i",
       `work/pinball-recordings/${id}.mp3`,
-      "-ss",
-      String(start),
-      "-t",
-      String(duration),
       "-ac",
       "1",
       "-ar",
       "44100",
       "-af",
-      `highpass=f=90,lowpass=f=6500,afade=t=in:d=0.003,afade=t=out:st=${duration - 0.035}:d=0.035`,
+      // Trim BEFORE fading, and reset timestamps. Output-side -ss applied
+      // after a fade starting at t=0 previously exported silent later clips.
+      `atrim=start=${start}:duration=${duration},asetpts=PTS-STARTPTS,highpass=f=90,lowpass=f=6500,afade=t=in:d=0.003,afade=t=out:st=${duration - 0.035}:d=0.035`,
       "-f",
       "f32le",
       "pipe:1",
@@ -45,6 +43,10 @@ for (const [name, id, start, duration] of clips) {
   let peak = 0;
   for (let i = 0; i < raw.length; i += 4)
     peak = Math.max(peak, Math.abs(raw.readFloatLE(i)));
+  if (!Number.isFinite(peak) || peak < 0.005 || raw.length < 4000)
+    throw new Error(
+      `${name}: silent, invalid or empty audio — refusing to export`,
+    );
   const count = raw.length / 4,
     wav = Buffer.alloc(44 + count * 2);
   wav.write("RIFF");

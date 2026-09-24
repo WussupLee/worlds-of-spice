@@ -386,6 +386,105 @@ test("real mechanism samples are quiet, reverberant and audible without music", 
   expect(actual.tail).toBeGreaterThan(0.00001);
 });
 
+test("sound check exposes every cue and plays all nine non-silent recordings", async ({
+  page,
+}) => {
+  test.skip(
+    !(await page.evaluate(() => typeof window.AudioContext === "function")),
+    "Web Audio unavailable in this browser binary.",
+  );
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "worlds-of-spice:settings:v4",
+      JSON.stringify({
+        effectsVolume: 0.24,
+        musicVolume: 0,
+        ambienceVolume: 0,
+      }),
+    );
+    const Original = window.AudioContext;
+    const w = window as unknown as {
+      __auditions: Array<{ duration: number; peak: number; loop: boolean }>;
+    };
+    w.__auditions = [];
+    window.AudioContext = class extends Original {
+      createBufferSource() {
+        const node = super.createBufferSource(),
+          start = node.start.bind(node);
+        node.start = (when = 0, offset = 0, duration?: number) => {
+          if (node.buffer && !node.loop)
+            w.__auditions.push({
+              duration: node.buffer.duration,
+              loop: node.loop,
+              peak: node.buffer
+                .getChannelData(0)
+                .reduce((p, x) => Math.max(p, Math.abs(x)), 0),
+            });
+          start(when, offset, duration);
+        };
+        return node;
+      }
+    };
+  });
+  await start(page);
+  await page
+    .getByRole("button", { name: "Audio and display settings" })
+    .click();
+  const picker = page.getByRole("combobox", {
+    name: "Sound effect",
+    exact: true,
+  });
+  await expect(picker.locator("option")).toHaveCount(42);
+  // Per-cue variant counters: repeating each pair must play both samples.
+  for (const [cue, duration] of [
+    ["flipper", 0.22],
+    ["flipper", 0.22],
+    ["release", 0.11],
+    ["bumper", 0.24],
+    ["bumper", 0.25],
+    ["launch", 0.95],
+    ["drain", 0.48],
+    ["drop", 0.18],
+    ["ramp", 0.9],
+  ] as const) {
+    await picker.selectOption(cue);
+    await expect(page.getByTestId("sound-trigger")).not.toBeEmpty();
+    await page.evaluate(() => {
+      (window as unknown as { __auditions: unknown[] }).__auditions = [];
+    });
+    await page.getByRole("button", { name: "TEST SOUND" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __auditions: unknown[] }).__auditions
+              .length,
+        ),
+      )
+      .toBeGreaterThan(0);
+    const sample = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __auditions: Array<{ duration: number; peak: number }>;
+          }
+        ).__auditions[0],
+    );
+    expect(sample.duration, cue).toBeCloseTo(duration, 2);
+    expect(sample.peak, cue).toBeGreaterThan(0.5);
+    await expect(page.locator("canvas")).toHaveAttribute(
+      "data-phase",
+      "paused",
+    );
+  }
+  await picker.selectOption("scoop-eject");
+  await expect(page.getByTestId("sound-trigger")).toContainText(
+    "released from the Citadel",
+  );
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.locator("canvas")).toHaveAttribute("data-phase", "playing");
+});
+
 test("all three mixer settings remain adjustable and persist after reload", async ({
   page,
 }) => {

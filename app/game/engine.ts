@@ -41,26 +41,51 @@ export type Ball = Point & {
   launchedAt: number;
   launchPower: number;
 };
-export type Cue =
-  | "flipper"
-  | "release"
-  | "launch"
-  | "rail"
-  | "bumper"
-  | "sling"
-  | "shot"
-  | "ramp"
-  | "save"
-  | "drain"
-  | "mode"
-  | "complete"
-  | "multiball"
-  | "tilt"
-  | "nudge"
-  | "spinner"
-  | "drop"
-  | "scoop"
-  | "ui";
+export const CUES = [
+  "flipper",
+  "release",
+  "launch",
+  "rail",
+  "bumper",
+  "sling",
+  "shot",
+  "ramp",
+  "save",
+  "drain",
+  "mode",
+  "complete",
+  "multiball",
+  "tilt",
+  "nudge",
+  "spinner",
+  "drop",
+  "scoop",
+  "ui",
+  "serve",
+  "pull",
+  "flipper-hit",
+  "ball-hit",
+  "ramp-exit",
+  "scoop-eject",
+  "orbit-exit",
+  "gate",
+  "inlane",
+  "outlane",
+  "bank-complete",
+  "combo",
+  "skill-shot",
+  "multiplier",
+  "lock",
+  "jackpot",
+  "super-jackpot",
+  "mode-progress",
+  "mode-failed",
+  "multiball-end",
+  "wizard",
+  "gameover",
+  "ball-search",
+] as const;
+export type Cue = (typeof CUES)[number];
 export type GameEvent = { cue: Cue; x: number; strength: number };
 export type Flipper = {
   x: number;
@@ -265,6 +290,7 @@ export class PinballEngine {
     this.phase = "playing";
     this.message = "Hold LAUNCH. Release into the stars.";
     this.spawn();
+    this.emit("ui");
   }
   private spawn(active = false, x = 558, y = 887) {
     const ball: Ball = {
@@ -281,6 +307,7 @@ export class PinballEngine {
       launchPower: 0,
     };
     this.balls.push(ball);
+    if (!active) this.emit("serve", x);
     return ball;
   }
   emit(cue: Cue, x = 300, strength = 1) {
@@ -311,9 +338,14 @@ export class PinballEngine {
     this.charge = 0;
   }
   pull() {
-    if (this.phase === "playing" && this.balls.some((b) => b.waiting)) {
+    if (
+      this.phase === "playing" &&
+      !this.charging &&
+      this.balls.some((b) => b.waiting)
+    ) {
       this.charging = true;
       this.charge = 0;
+      this.emit("pull", 558);
     }
   }
   launch(power = this.charge) {
@@ -397,7 +429,10 @@ export class PinballEngine {
         this.score += 1_000_000;
         this.say("DOMINION CLAIMED · 1,000,000", 5);
         this.emit("complete");
-      } else this.say("Territory unfinished · Try again");
+      } else {
+        this.say("Territory unfinished · Try again");
+        this.emit("mode-failed");
+      }
       this.mode = null;
       this.progress = 0;
     }
@@ -415,10 +450,25 @@ export class PinballEngine {
     for (const b of [...this.balls]) {
       if (b.waiting) continue;
       if (b.path) {
+        const previousElapsed = b.path.elapsed;
         b.path.elapsed += dt;
+        if (
+          b.path.kind === "ramp" &&
+          previousElapsed < 0.23 &&
+          b.path.elapsed >= 0.23
+        )
+          this.emit("gate", b.x, 0.65);
         const t = b.path.elapsed / b.path.duration;
         Object.assign(b, pathPoint(b.path.points, Math.min(1, t)));
         if (t >= 1) {
+          this.emit(
+            b.path.kind === "scoop"
+              ? "scoop-eject"
+              : b.path.kind === "ramp"
+                ? "ramp-exit"
+                : "orbit-exit",
+            b.x,
+          );
           b.vx = b.path.exit.x;
           b.vy = b.path.exit.y;
           b.path = undefined;
@@ -427,6 +477,7 @@ export class PinballEngine {
         this.trail(b);
         continue;
       }
+      const previousY = b.y;
       b.vy += 650 * dt;
       b.vx *= 1 - dt * 0.07;
       b.vy *= 1 - dt * 0.035;
@@ -455,7 +506,7 @@ export class PinballEngine {
             b.launchPower <= 0.8;
           this.score += skill ? 25_000 : 2_500;
           this.say(skill ? "SKILL SHOT · 25,000" : "Ball in play");
-          this.emit("shot", 90, skill ? 1 : 0.5);
+          this.emit(skill ? "skill-shot" : "shot", 90, skill ? 1 : 0.5);
         }
         continue;
       }
@@ -476,6 +527,8 @@ export class PinballEngine {
             if (normal < 0) {
               b.vx -= normal * 1.6 * nx;
               b.vy -= normal * 1.6 * ny;
+              if (normal < -70)
+                this.emit("rail", p.x, Math.min(1, -normal / 900));
             }
           } else if (this.clock > this.bumperCooldown[i]) {
             const v = Math.max(500, Math.hypot(b.vx, b.vy) * 0.9);
@@ -508,16 +561,23 @@ export class PinballEngine {
                 this.score += 10_000;
                 this.saveUntil = Math.max(this.saveUntil, this.clock + 5);
                 this.say("SPICE CACHE · 10,000 + 5s shield");
-                this.emit("save");
+                this.emit("bank-complete", p.x);
               }
             }
           }
           this.flash(p.x, p.y, "#8bd5e3");
-          this.emit("drop", p.x, 0.8);
+          if (!this.tilted) this.emit("drop", p.x, 0.8);
         }
       });
       this.collideFlipper(b, this.left);
       this.collideFlipper(b, this.right);
+      // Existing return/outlane crossings, not new scoring rules or collisions.
+      if (previousY < 710 && b.y >= 710 && b.vy > 0) {
+        if ((b.x > 32 && b.x < 77) || (b.x > 494 && b.x < 533))
+          this.emit("outlane", b.x);
+        else if ((b.x >= 77 && b.x < 118) || (b.x > 464 && b.x <= 494))
+          this.emit("inlane", b.x);
+      }
       if (b.cooldown < this.clock && !this.tilted && b.vy < 0)
         for (const shot of SHOT_ORDER) {
           const p = SHOTS[shot];
@@ -543,6 +603,7 @@ export class PinballEngine {
         b.vx += b.x < 298 ? 60 : -60;
         b.stuck = 0;
         this.say("Ball search · Released");
+        this.emit("ball-search", b.x);
       }
       this.trail(b);
       if (b.y > 965 || b.x < 0 || b.x > 600) this.drain(b);
@@ -569,7 +630,7 @@ export class PinballEngine {
           a.vy -= v * ny;
           b.vx += v * nx;
           b.vy += v * ny;
-          this.emit("rail", a.x, 0.6);
+          this.emit("ball-hit", a.x, Math.min(1, v / 600));
         }
       }
   }
@@ -626,6 +687,8 @@ export class PinballEngine {
       this.score += SCORE.sling;
       this.flash(hit.x, hit.y);
       this.emit("sling", hit.x);
+    } else if (v < -70) {
+      this.emit("rail", hit.x, Math.min(1, -v / 900));
     }
   }
   private collideRail(b: Ball, r: Rail) {
@@ -677,13 +740,14 @@ export class PinballEngine {
     if (relative < 0) {
       b.vx -= relative * 1.6 * nx;
       b.vy -= relative * 1.6 * ny;
+      if (relative < -65)
+        this.emit("flipper-hit", p.x, Math.min(1, -relative / 700));
     }
     // Coil energy only on the rising stroke: holding a bat never auto-shoots.
     if (f.pressed && !this.tilted && Math.abs(f.omega) > 1 && ny < 0.35) {
       const side = f === this.left ? 1 : -1;
       b.vy = Math.min(b.vy, -920 - p.t * 230);
       b.vx = side * (580 - 930 * p.t);
-      this.emit("flipper", f.x, 0.8);
       this.flash(p.x, p.y, "#e9f6ef");
     }
   }
@@ -694,6 +758,7 @@ export class PinballEngine {
     this.combo =
       this.clock <= this.comboUntil ? Math.min(5, this.combo + 1) : 1;
     this.comboUntil = this.clock + 4;
+    if (this.combo > 1) this.emit("combo", SHOTS[shot].x, this.combo / 5);
     this.score += scoreMajorShot({
       shot,
       combo: this.combo,
@@ -771,6 +836,7 @@ export class PinballEngine {
     ) {
       this.progress++;
       this.score += SCORE.modeShot * this.multiplier;
+      if (this.progress < 4) this.emit("mode-progress", SHOTS[shot].x);
       if (this.progress >= 4) {
         this.completed.add(modeBefore as ModeId);
         this.score += SCORE.modeComplete;
@@ -787,6 +853,12 @@ export class PinballEngine {
             ? SCORE.superJackpot
             : SCORE.jackpot;
       this.progress++;
+      this.emit(
+        shot === "citadel" && modeBefore === "multiball"
+          ? "super-jackpot"
+          : "jackpot",
+        SHOTS[shot].x,
+      );
       this.say(
         modeBefore === "wizard"
           ? "DOMINION SHOT · 100,000"
@@ -796,6 +868,7 @@ export class PinballEngine {
       );
     }
     if (shot === selected) {
+      if (this.multiplier < 5) this.emit("multiplier", SHOTS[shot].x);
       this.multiplier = Math.min(5, this.multiplier + 1);
       this.peakMultiplier = Math.max(this.peakMultiplier, this.multiplier);
       this.prescienceIndex = (this.prescienceIndex + 1) % 5;
@@ -811,11 +884,12 @@ export class PinballEngine {
         this.spawn(true, 350, 550);
         this.saveUntil = this.clock + 12;
         this.say("DOMINION ASCENDANT", 5);
-        this.emit("multiball");
+        this.emit("wizard");
         return;
       }
       if (!this.multiballComplete) {
         this.locks = Math.min(3, this.locks + 1);
+        if (this.locks < 3) this.emit("lock", SHOTS[shot].x);
         if (this.locks >= 3) {
           this.mode = "multiball";
           this.modeUntil = Infinity;
@@ -872,6 +946,7 @@ export class PinballEngine {
       this.multiballComplete = true;
       this.mode = null;
       this.say("The Wyrm retreats · Multiball complete");
+      this.emit("multiball-end");
     }
     if (this.balls.length) return;
     this.ballsRemaining--;
@@ -887,6 +962,7 @@ export class PinballEngine {
     if (this.ballsRemaining <= 0) {
       this.phase = "gameover";
       this.say("The sands remember");
+      this.emit("gameover");
     } else {
       this.nextBallAt = this.clock + 1.15;
       this.say(`Ball ${4 - this.ballsRemaining} · A new chance`);
@@ -932,7 +1008,9 @@ export class PinballEngine {
       activeBalls: this.balls.length,
       ramp:
         (this.balls.find((b) => b.path?.kind === "ramp")?.path?.shot as
-          "harvest" | "dune" | undefined) ?? null,
+          | "harvest"
+          | "dune"
+          | undefined) ?? null,
       comboSeconds: Math.max(0, this.comboUntil - this.clock),
       multiballComplete: this.multiballComplete,
       peakMultiplier: this.peakMultiplier,

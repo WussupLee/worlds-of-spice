@@ -30,6 +30,10 @@ Edits: selected short isolated events; mono 44.1 kHz PCM; 90 Hz high-pass,
 the reproducible processing pipeline are in scripts/prepare-mechanics.mjs.
 Runtime changes: quiet gain, small pitch variation, distance filtering,
 stereo positioning and a shared original 3.4-second convolution reverb.
+Feature mechanisms also receive a restrained, band-limited presence layer;
+several interaction types reuse these clips with different gain/pitch.
+Exports were repaired to trim and reset timestamps BEFORE applying fades.
+All nine WAVs are now checked for actual PCM energy, not only file headers.
 
 CC0 allows commercial use, editing and redistribution without attribution.
 Credit is nevertheless included here and in the game's Credits.

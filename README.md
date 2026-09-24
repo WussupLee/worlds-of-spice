@@ -10,6 +10,7 @@ The project uses original names, visuals and game rules, with licensed music and
 - Desktop: `A` / `D` or left / right arrows control the flippers; Space launches; `Z` / `X` nudge; `P` or Escape pauses.
 - Tap either flipper before launching to move the illuminated Prescience shot. Select Caravan and release at 60–80% power for a skill shot.
 - Chain major shots to build Flow, complete all four territory modes, and strike the center three times to awaken multiball.
+- In Sound & Feel, Sound check previews each of the 42 effects and explains when it triggers. Music and wind have independent controls.
 
 ## Development
 
@@ -65,6 +66,8 @@ See [research and design decisions](docs/DESIGN-RESEARCH.md) and [verification c
 Mechanical recordings: [1977 Bronco pinball by schafferdavid](https://freesound.org/people/schafferdavid/packs/25508/), CC0. Nine edited local samples cover flippers, bumpers, plunger, drains, relays and rolling. [Full attribution and processing](public/audio/mechanics/LICENSE.txt). Wind and musical game accents remain original synthesis.
 
 See [sound and clarity changes, provenance and settings migration](docs/SOUND-AND-CLARITY.md).
+
+The subsequent [complete sound ledger and silent-recording repair](docs/SOUND-COVERAGE.md) documents the corrected WAV exports, Space Cadet trigger comparison, per-mechanism mix and signal-level regression tests.
 
 ## September 24 overhaul
 

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PinballEngine } from "./game/engine";
+import { CUES, PinballEngine, type Cue } from "./game/engine";
+import { SOUND_CATALOG } from "./game/sound-catalog";
 import { TableRenderer } from "./game/renderer";
 import { CabinetAudio } from "./game/audio";
 import {
@@ -34,7 +35,8 @@ export default function PinballClient() {
       "help" | "settings" | "scores" | "credits" | null
     >(null),
     [error, setError] = useState(""),
-    [tableReady, setTableReady] = useState(false);
+    [tableReady, setTableReady] = useState(false),
+    [auditionCue, setAuditionCue] = useState<Cue>("bumper");
   const pointerSides = useRef(new Map<number, "left" | "right">()),
     keys = useRef(new Set<string>()),
     pulling = useRef(false);
@@ -155,7 +157,7 @@ export default function PinballClient() {
         needsRender = false;
         lastDrawPhase = e.phase;
       }
-      for (const ev of e.events.splice(0)) audio.current?.play(ev);
+      audio.current?.playEvents(e.events.splice(0));
       const rolling = e.balls.filter(
         (b) => !b.waiting && b.path?.kind !== "scoop",
       );
@@ -261,7 +263,7 @@ export default function PinballClient() {
   useEffect(() => {
     if (state.phase !== "gameover" || recorded.current) return;
     recorded.current = true;
-    audio.current?.active(false);
+    audio.current?.finish();
     queueMicrotask(() =>
       setScores((previous) => {
         const next = [
@@ -306,6 +308,7 @@ export default function PinballClient() {
   const openDialog = (kind: NonNullable<typeof dialog>) => {
     resumeOnClose.current = engine.current?.phase === "playing";
     if (resumeOnClose.current) pause(true);
+    else audio.current?.active(false);
     setDialog(kind);
     modal.current?.showModal();
   };
@@ -761,11 +764,34 @@ export default function PinballClient() {
                 />
               </label>
             ))}
+            <label className="volume-row">
+              <span>Sound check</span>
+              <select
+                aria-label="Sound effect"
+                value={auditionCue}
+                onChange={(e) => setAuditionCue(e.target.value as Cue)}
+              >
+                {(["Mechanisms", "Rules & rewards"] as const).map((group) => (
+                  <optgroup label={group} key={group}>
+                    {CUES.filter(
+                      (cue) => SOUND_CATALOG[cue].group === group,
+                    ).map((cue) => (
+                      <option value={cue} key={cue}>
+                        {SOUND_CATALOG[cue].label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <p className="dialog-note" data-testid="sound-trigger">
+              {SOUND_CATALOG[auditionCue].trigger}
+            </p>
             <button
               className="preview-audio"
-              onClick={() => audio.current?.preview()}
+              onClick={() => audio.current?.preview(auditionCue)}
             >
-              TEST SOUND · DISTANT MECHANISMS
+              TEST SOUND · SELECTED EFFECT
             </button>
             <p className="music-credit">
               “Shadows and Dust” by{" "}
