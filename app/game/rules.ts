@@ -1,4 +1,4 @@
-import type { ModeId, ShotId, StrategyId } from "./types";
+import type { ModeId, ShotId } from "./types";
 
 export const SCORE = {
   sling: 100,
@@ -20,11 +20,16 @@ export function comboMultiplier(combo: number) {
 export function scoreMajorShot(input: {
   combo: number;
   tableMultiplier: number;
-  strategy: StrategyId;
   shot: ShotId;
 }) {
-  const strategyBonus = input.strategy === "harvester" && (input.shot === "harvest" || input.shot === "dune") ? 1.25 : 1;
-  return Math.round(SCORE.majorShot * comboMultiplier(input.combo) * input.tableMultiplier * strategyBonus);
+  const routeBonus =
+    input.shot === "harvest" || input.shot === "dune" ? 1.25 : 1;
+  return Math.round(
+    SCORE.majorShot *
+      comboMultiplier(input.combo) *
+      input.tableMultiplier *
+      routeBonus,
+  );
 }
 
 export function modeTarget(mode: ModeId, shot: ShotId, oracleShot: ShotId) {
@@ -32,8 +37,4 @@ export function modeTarget(mode: ModeId, shot: ShotId, oracleShot: ShotId) {
   if (mode === "storm") return shot === "storm" || shot === "caravan";
   if (mode === "siege") return shot === "citadel";
   return shot === oracleShot;
-}
-
-export function ballSaveDuration(strategy: StrategyId) {
-  return strategy === "warden" ? 12_000 : 8_000;
 }

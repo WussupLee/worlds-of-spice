@@ -1,0 +1,31 @@
+# Verification and honest boundaries
+
+## Automated checks
+
+- `pnpm test`: deterministic engine/rules/storage tests. These cover launch strength, skill-shot qualification, both rising flippers, held energy limits, left/right cradle and release, rail tunneling, pause clocks, one-time ramp capture and return, stand-up bank awards, save deadlines, three-ball termination, latched tilt, Oracle progression, combo expiry/cap, multiball completion and finale qualification.
+- Ten seeded three-minute engine simulations use varied flipper input. Each must end normally with three balls consumed, finite coordinates/velocities and no escaped living balls. This caught trapping around sling vertices and return-lane caps; those geometries were corrected.
+- `pnpm lint` and `pnpm exec tsc --noEmit` check source consistency.
+- `pnpm build:pages` verifies a fresh static export and every linked build asset before creating a content-versioned offline cache.
+- `pnpm test:browser` runs against the production artifact mounted at its real GitHub Pages path, not just the development server.
+
+## Browser coverage
+
+Chromium desktop, Pixel 7 emulation and WebKit iPhone 13 emulation cover launch and scoring, independent flippers, pause/resume, modal pause, blur handling, settings persistence, responsive sizing and runtime errors. An additional layout sweep covers 320×568, 360×740, 844×390, 1024×768 and 1366×768. Screenshots are produced as test artifacts for visual inspection.
+
+Chromium-specific checks exercise native two-contact touch input and cancellation, actual Web Audio context state and soundtrack playback, offline reload with all application assets, and cached MP3 byte-range responses. A complete production-browser game uses an accelerated browser clock (normal animation frames and the unmodified game engine) to reach game over, save the score, and restart cleanly.
+
+The Windows WebKit binary used locally has no `AudioContext` or `webkitAudioContext`. Its audio-graph test is explicitly skipped, not reported as a successful iOS audio test. Duplicate viewport/lifecycle tests and the Chromium-only touch protocol are scoped to the relevant runner. CI also runs Chromium and WebKit on Linux.
+
+## Implementation boundaries
+
+This is a carefully tested **2.5D arcade pinball game**, not an assertion of parity with a commercial 3D simulator. Free balls collide with rails, bumper circles, convex slings, target faces, moving flippers and each other at a fixed 240 Hz simulation rate. Captured ramps/orbits/scoop travel follows authored track splines with explicit exit velocities. There is no full 3D rigid-body ramp simulation or modeled ball spin/friction tensor.
+
+Automated and emulated tests do not establish subjective “world-class” quality or prove zero defects. Real-device Safari audio, touch latency, thermal throttling, haptics, battery usage, interrupted calls, and Add to Home Screen behavior still need hands-on phone testing. Browser autoplay policies can require another user gesture. Unsupported audio hardware degrades to a playable silent game.
+
+The final balancing question is human: do the returns feel satisfying, is the ball easy to read, and can a practiced player choose shots reliably? Use the live phone build to assess those qualities; unit tests cannot substitute for that judgment.
+
+## Deployment protections
+
+GitHub Actions checks tests, lint, types, production build and browser behavior before publishing `dist/client`. The service worker precaches the complete artifact, uses a build-content hash for updates, only manages this game's cache namespace, and never replaces a missing script with an HTML page. Audio range requests receive valid cached `206` responses offline.
+
+The current vinext beta can throw a libuv assertion during process shutdown on Windows **after** successful prerendering. The Pages wrapper tolerates only that exact error after explicit build-complete output, a freshly written index, and verified linked assets. Other errors, stale exports and missing assets fail the build. Linux CI is the final deployment gate.
