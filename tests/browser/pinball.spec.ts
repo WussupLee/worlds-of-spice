@@ -259,10 +259,16 @@ test("the audio refresh preserves previous mute and accessibility choices", asyn
   await expect(page.getByLabel("Touch haptics")).not.toBeChecked();
   await expect(
     page.getByRole("slider", { name: "Pinball mechanisms" }),
-  ).toHaveValue("82");
+  ).toHaveValue("24");
+  await expect(page.getByRole("slider", { name: "Desert score" })).toHaveValue(
+    "72",
+  );
+  await expect(
+    page.getByRole("slider", { name: "Wind & shifting sand" }),
+  ).toHaveValue("3");
 });
 
-test("mechanism output is audible with score and wind turned down", async ({
+test("real mechanism samples are quiet, reverberant and audible without music", async ({
   page,
 }) => {
   test.skip(
@@ -272,6 +278,24 @@ test("mechanism output is audible with score and wind turned down", async ({
   await page.addInitScript(() => {
     const Original = window.AudioContext;
     window.AudioContext = class extends Original {
+      createConvolver() {
+        const node = super.createConvolver();
+        (
+          window as unknown as { __cabinetReverb: ConvolverNode }
+        ).__cabinetReverb = node;
+        return node;
+      }
+      createBufferSource() {
+        const node = super.createBufferSource();
+        const start = node.start.bind(node);
+        node.start = (when = 0, offset = 0, duration?: number) => {
+          const w = window as unknown as { __recordedDurations?: number[] };
+          if (!node.loop && node.buffer)
+            (w.__recordedDurations ??= []).push(node.buffer.duration);
+          start(when, offset, duration);
+        };
+        return node;
+      }
       createDynamicsCompressor() {
         const node = super.createDynamicsCompressor();
         const w = window as unknown as {
@@ -317,8 +341,25 @@ test("mechanism output is audible with score and wind turned down", async ({
   let measuredPeak = 0;
   await expect
     .poll(async () => (measuredPeak = Math.max(measuredPeak, await peak())))
-    .toBeGreaterThan(0.015);
-  expect(measuredPeak).toBeLessThan(0.98);
+    .toBeGreaterThan(0.001);
+  expect(measuredPeak).toBeLessThan(0.15);
+  const actual = await page.evaluate(() => {
+    const w = window as unknown as {
+      __cabinetReverb: ConvolverNode;
+      __recordedDurations: number[];
+    };
+    return {
+      reverb: w.__cabinetReverb.buffer!.duration,
+      samples: w.__recordedDurations,
+    };
+  });
+  expect(actual.reverb).toBeCloseTo(3.4, 2);
+  expect(
+    actual.samples.some((duration) => Math.abs(duration - 0.22) < 0.01),
+  ).toBe(true);
+  // The recorded flipper is only 220 ms; later output must be its room tail.
+  await page.waitForTimeout(1600);
+  expect(await peak()).toBeGreaterThan(0.00001);
 });
 
 test("all three mixer settings remain adjustable and persist after reload", async ({
@@ -338,7 +379,14 @@ test("all three mixer settings remain adjustable and persist after reload", asyn
     await slider.press("Home");
     for (let i = 0; i < Number(value); i++) await slider.press("ArrowRight");
   }
+  await page
+    .getByRole("combobox", { name: "Table detail" })
+    .selectOption("battery");
   await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.locator("canvas")).toHaveAttribute(
+    "data-quality",
+    /^battery/,
+  );
   await page.reload();
   await page
     .getByRole("button", { name: "Audio and display settings" })
@@ -352,6 +400,9 @@ test("all three mixer settings remain adjustable and persist after reload", asyn
   await expect(
     page.getByRole("slider", { name: /Wind & shifting sand/ }),
   ).toHaveValue("26");
+  await expect(
+    page.getByRole("combobox", { name: "Table detail" }),
+  ).toHaveValue("battery");
 });
 
 test("small phones, landscape phones and laptops fit without stretching", async ({

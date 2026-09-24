@@ -15,4 +15,7 @@ This is a licensed independent composition, not an official Dune score or record
 The track accompanies gameplay; it is not offered as a standalone music service.
 Do not submit this music to audio fingerprinting services or Content ID.
 
-All cabinet mechanisms, rolling steel, wind and shifting-sand effects are original runtime synthesis.
+Cabinet mechanisms and rolling steel use edited CC0 recordings by schafferdavid,
+from a real 1977 Gottlieb Bronco. See mechanics/LICENSE.txt for source links,
+license and processing details. Wind, shifting sand, musical game accents and
+the reverb impulse response remain original runtime synthesis.

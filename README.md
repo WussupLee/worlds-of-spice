@@ -2,7 +2,7 @@
 
 An original, mobile-first desert science-fiction pinball game built for the web. The table combines tactile movie-era pinball ideas—clear central objectives, route-based progression, timed modes, selectable shot multipliers, and escalating multiball—with a retro 1980s European graphic-novel art direction.
 
-The project uses original names, visuals, audio synthesis, and game rules. It is not affiliated with Dune, Legendary, Warner Bros., any publisher, or any pinball manufacturer.
+The project uses original names, visuals and game rules, with licensed music and CC0 pinball recordings. It is not affiliated with Dune, Legendary, Warner Bros., any publisher, or any pinball manufacturer.
 
 ## Play
 
@@ -27,7 +27,7 @@ pnpm test:browser
 ```
 
 `pnpm build:pages` produces the static GitHub Pages export in `dist/client`.
-`pnpm preview:pages` serves that exact artifact at `http://127.0.0.1:4173/worlds-of-spice/`.
+`pnpm preview:pages` serves that exact artifact at `http://127.0.0.1:4175/worlds-of-spice/`. Stop a manual preview before running browser tests; the test runner deliberately refuses to reuse an unrelated server.
 The GitHub Actions workflow runs the checks before publishing to [the live game](https://wussuplee.github.io/worlds-of-spice/).
 
 ## Technology
@@ -36,8 +36,9 @@ The GitHub Actions workflow runs the checks before publishing to [the live game]
 - A deterministic 240 Hz physics simulation, independent of React and rendering
 - Heel-pivoted rotating flippers with contact-point velocity, rising-stroke impulses, held cradles, gravity, restitution, convex slingshots and ball-to-ball contacts
 - Three.js WebGL 3D cabinet: original printed art, depth-buffered chrome wireforms, translucent ramp entries, moving gates, drop targets, spinners, a rising worm and reflective steel balls
-- Layered procedural cabinet, ball, target, flipper, wind, and shifting-sand audio
-- CC BY 4.0 cinematic score with independent music, ambience and effects controls, score ducking and a paused audio preview
+- Real CC0 mechanical pinball recordings, warm distance filtering and a quiet 3.4-second stereo reverb; extremely subtle synthesized wind and shifting sand
+- Foreground CC BY 4.0 cinematic score with independent music, ambience and effects controls, no collision ducking and a paused audio preview
+- Up to 3× rendering with adaptive recovery, cleaner playfield print, physical clearcoat, rounded metalwork, sharper shadows and selectable display detail
 - Local high scores and settings
 - Installable offline web app
 
@@ -59,7 +60,11 @@ See [research and design decisions](docs/DESIGN-RESEARCH.md) and [verification c
 
 “Shadows and Dust” by Scott Buckley — released under CC-BY 4.0. www.scottbuckley.com.au.
 
-[Track and creator](https://www.scottbuckley.com.au/library/shadows-and-dust/) · [License](https://creativecommons.org/licenses/by/4.0/). Bundled at 128 kbps for mobile delivery; no musical edits. This independent ambient composition is not the official Dune score. Cabinet effects and shifting-sand ambience are synthesized locally.
+[Track and creator](https://www.scottbuckley.com.au/library/shadows-and-dust/) · [License](https://creativecommons.org/licenses/by/4.0/). Bundled at 128 kbps for mobile delivery; no musical edits. This independent ambient composition is not the official Dune score.
+
+Mechanical recordings: [1977 Bronco pinball by schafferdavid](https://freesound.org/people/schafferdavid/packs/25508/), CC0. Nine edited local samples cover flippers, bumpers, plunger, drains, relays and rolling. [Full attribution and processing](public/audio/mechanics/LICENSE.txt). Wind and musical game accents remain original synthesis.
+
+See [sound and clarity changes, provenance and settings migration](docs/SOUND-AND-CLARITY.md).
 
 ## September 24 overhaul
 

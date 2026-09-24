@@ -13,7 +13,7 @@ export default defineConfig({
       process.platform === "win32" && !process.env.PINBALL_SOFTWARE_RENDERING
         ? { args: ["--enable-gpu", "--use-angle=d3d11"] }
         : {},
-    baseURL: "http://127.0.0.1:4173/worlds-of-spice/",
+    baseURL: "http://127.0.0.1:4175/worlds-of-spice/",
     // Continuous screencasting forces WebGL readbacks on CPU-only CI runners.
     // Keep action/DOM traces; explicit verification/failure screenshots remain.
     trace: { mode: "retain-on-failure", screenshots: false, snapshots: true },
@@ -21,8 +21,8 @@ export default defineConfig({
   },
   webServer: {
     command: "node scripts/serve-pages.mjs",
-    url: "http://127.0.0.1:4173/worlds-of-spice/",
-    reuseExistingServer: !process.env.CI,
+    url: "http://127.0.0.1:4175/worlds-of-spice/",
+    reuseExistingServer: false,
   },
   projects: [
     {

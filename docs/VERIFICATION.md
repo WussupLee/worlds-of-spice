@@ -33,7 +33,7 @@ GitHub Actions checks tests, lint, types, production build and browser behavior 
 
 The current vinext beta can throw a libuv assertion during process shutdown on Windows **after** successful prerendering. The Pages wrapper tolerates only that exact error after explicit build-complete output, a freshly written index, and verified linked assets. Other errors, stale exports and missing assets fail the build. Linux CI is the final deployment gate.
 
-## September 24 3D verification
+## September 24 initial 3D verification (before sound/clarity refinement)
 
 - 31 unit/rules/storage tests, including eight new elevation/mechanism contracts.
 - Browser tests assert `data-renderer=webgl-3d`; a fallback or blank canvas is not accepted as a 3D pass.
@@ -43,6 +43,16 @@ The current vinext beta can throw a libuv assertion during process shutdown on W
 - Rendering merges static meshes and articulated toy parts by material, caches stationary shadows, caps pixel ratio at 1.65 and drops it under sustained slow frames. A world-height-aware ball shadow remains updated each frame.
 - Pause and settings freeze WebGL draws until a resize or resume. Browser instrumentation verifies draw calls stop while paused and restart during play. This removes unnecessary GPU work behind the mixer without shortening its native-keyboard persistence test.
 
-Latest local production suite: 23 browser scenarios verified across the full and follow-up runs, with 10 explicitly scoped/unavailable checks skipped. Windows WebKit omits Web Audio, so its two audio checks are not counted as passes. Final gameplay performance sampling uses a 3× device-pixel-ratio emulation (raster capped to 1.65×), 180 frames, a moving ball and alternating flipper input; reproduce with `node scripts/measure-renderer.mjs` while the development server runs.
+That local production suite verified 23 browser scenarios across the full and follow-up runs, with 10 explicitly scoped/unavailable checks skipped. Windows WebKit omits Web Audio, so its two audio checks were not counted as passes. Initial gameplay performance sampling used a 3× device-pixel-ratio emulation (raster then capped to 1.65×), 180 frames, a moving ball and alternating flipper input; reproduce with `node scripts/measure-renderer.mjs` while the development server runs.
 
 CPU-only CI uses one browser worker and action/DOM traces without continuous WebGL screencast readbacks. Explicit screenshots remain enabled. The full-game lifecycle advances the browser clock in quarter-second frames; collisions still advance at 240 Hz. Ordinary touch, pause, audio and layout tests use real elapsed time. Native long-window audio measurement avoids test-only worklet initialization, which hung the Linux WebKit process despite ordinary playback tests passing. The game itself bounds catch-up at 250 ms and automatically reduces raster density under sustained rendering pressure; no test-only physics or scripted drains are shipped.
+
+## September 24 sound and clarity verification
+
+- 38 unit tests pass, including real WAV file contracts, event-to-recording mapping, music-led gain calibration, settings migration and adaptive-resolution recovery/budgets.
+- The fresh production artifact passes all 23 applicable local browser scenarios; ten platform-specific or duplicate checks are explicitly skipped. Lint and TypeScript checks also pass.
+- Actual browser output with music and air zero passes the quiet-signal bounds: peak greater than 0.001 and less than 0.15. Instrumentation verifies a real 220 ms recorded flipper starts, a 3.4-second convolver is connected, and a later output tail remains after the recording ends. These are measured signal checks, not a claim to have listened through physical phone speakers.
+- Mixer values and Battery Saver detail persist through reload; migration preserves mute, haptics and reduced-motion preferences while applying the new default 24/72/3 effects/music/wind mix.
+- A 390×844, DPR 3 Chromium run now renders the cabinet at **1170×1950**: 180 real-time frames, median **16.7 ms**, p95 **17.8 ms**, 117 draw calls and no runtime errors. This is AMD Radeon RX 6600 desktop hardware with a phone viewport, **not phone hardware**.
+- Inspected the rendered phone table: cleaner print, legible contour detail, stronger ground-label contrast, smoother metal edges and depth-separated raised returns. The illustration itself remains 1024×1536; see [the refinement and image-generation provenance](SOUND-AND-CLARITY.md).
+- The production preview uses port 4175 and refuses to reuse another server. An initial aborted run found an unrelated project occupying 4173; it was left untouched and does not count as game verification.

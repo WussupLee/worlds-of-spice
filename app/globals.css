@@ -623,6 +623,17 @@ kbd {
   accent-color: #c5a571;
   height: 24px;
 }
+.volume-row select {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid #6d6452;
+  border-radius: 3px;
+  padding: 11px 9px;
+  color: #eee2c8;
+  background: #131b20;
+  font: inherit;
+  font-size: 12px;
+}
 .toggle-row {
   display: flex;
   justify-content: space-between;

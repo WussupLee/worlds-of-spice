@@ -11,6 +11,7 @@ const mime = {
   ".png": "image/png",
   ".webmanifest": "application/manifest+json",
   ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
   ".woff2": "font/woff2",
 };
 createServer((req, res) => {
@@ -55,6 +56,6 @@ createServer((req, res) => {
   } catch {
     res.writeHead(404).end();
   }
-}).listen(4173, "127.0.0.1", () =>
-  console.log("Pages preview: http://127.0.0.1:4173/worlds-of-spice/"),
+}).listen(4175, "127.0.0.1", () =>
+  console.log("Pages preview: http://127.0.0.1:4175/worlds-of-spice/"),
 );

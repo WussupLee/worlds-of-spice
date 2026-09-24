@@ -11,9 +11,9 @@ import {
   type GameSnapshot,
   type HighScoreEntry,
 } from "./game/types";
-import { parseScores, parseSettings, saveLocal } from "./game/storage";
+import { parseScores, restoreSettings, saveLocal } from "./game/storage";
 
-const SETTINGS_KEY = "worlds-of-spice:settings:v3",
+const SETTINGS_KEY = "worlds-of-spice:settings:v4",
   SCORES_KEY = "worlds-of-spice:scores:v1";
 const INITIAL = new PinballEngine().snapshot();
 const format = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -88,28 +88,14 @@ export default function PinballClient() {
     let restored = { ...DEFAULT_SETTINGS },
       history: HighScoreEntry[] = [];
     try {
-      restored = parseSettings(localStorage.getItem(SETTINGS_KEY));
-      if (!localStorage.getItem(SETTINGS_KEY)) {
-        const previous = localStorage.getItem("worlds-of-spice:settings:v2");
-        if (previous) {
-          const prefs = parseSettings(previous);
-          restored = {
-            ...restored,
-            muted: prefs.muted,
-            haptics: prefs.haptics,
-            reducedMotion: prefs.reducedMotion,
-            ballTrail: prefs.ballTrail,
-          };
-        }
-      }
+      restored = restoreSettings(
+        localStorage.getItem(SETTINGS_KEY),
+        localStorage.getItem("worlds-of-spice:settings:v3") ??
+          localStorage.getItem("worlds-of-spice:settings:v2"),
+        matchMedia("(prefers-reduced-motion: reduce)").matches,
+      );
+      saveLocal(SETTINGS_KEY, restored);
       history = parseScores(localStorage.getItem(SCORES_KEY));
-      if (
-        !localStorage.getItem(SETTINGS_KEY) &&
-        !localStorage.getItem("worlds-of-spice:settings:v2")
-      )
-        restored.reducedMotion = matchMedia(
-          "(prefers-reduced-motion: reduce)",
-        ).matches;
     } catch {
       /* Defaults work when storage is unavailable. */
     }
@@ -748,8 +734,8 @@ export default function PinballClient() {
             <p className="eyebrow">TUNE YOUR CABINET</p>
             <h2>SOUND & FEEL</h2>
             <p className="dialog-note">
-              A restrained mix for headphones or your phone speaker. Changes
-              apply immediately.
+              The score leads. Real pinball mechanisms echo softly in the
+              distance; wind is barely a whisper. Changes apply immediately.
             </p>
             {(
               [
@@ -779,7 +765,7 @@ export default function PinballClient() {
               className="preview-audio"
               onClick={() => audio.current?.preview()}
             >
-              TEST SOUND · FLIP / IMPACT / SCORE
+              TEST SOUND · DISTANT MECHANISMS
             </button>
             <p className="music-credit">
               “Shadows and Dust” by{" "}
@@ -792,6 +778,29 @@ export default function PinballClient() {
               </a>{" "}
               · CC BY 4.0
             </p>
+            <label className="volume-row">
+              <span>Table detail</span>
+              <select
+                aria-label="Table detail"
+                value={settings.renderQuality}
+                onChange={(e) =>
+                  change({
+                    renderQuality: e.target
+                      .value as GameSettings["renderQuality"],
+                  })
+                }
+              >
+                <option value="auto">
+                  Automatic · sharp with adaptive performance
+                </option>
+                <option value="sharp">
+                  Maximum clarity · more graphics power
+                </option>
+                <option value="battery">
+                  Battery saver · lower resolution
+                </option>
+              </select>
+            </label>
             {(
               [
                 ["haptics", "Touch haptics"],
@@ -862,9 +871,18 @@ export default function PinballClient() {
               playback; no musical edits.
             </p>
             <p>
-              Pinball mechanisms, rolling steel, wind and shifting sands are
-              synthesized for this table. Original generated landscape art is
-              inspired by retro science-fiction illustration.
+              Real mechanical recordings:{" "}
+              <a
+                href="https://freesound.org/people/schafferdavid/packs/25508/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                “1977 Bronco pinball” by schafferdavid
+              </a>
+              , CC0. Edited into short flipper, bumper, plunger, drain and relay
+              samples; softened and reverberated for this table. Wind and
+              musical accents are synthesized. Original generated landscape art
+              is inspired by retro science-fiction illustration.
             </p>
             <p className="dialog-note">
               An independent desert science-fiction homage. No affiliation with

@@ -1,10 +1,23 @@
 import type { Cue, GameEvent } from "./engine";
 import type { GameSettings } from "./types";
+import {
+  CINEMATIC_MIX,
+  RECORDED_CLIPS,
+  recordedCue,
+  type RecordedClip,
+} from "./audio-profile";
 
 /** One audio graph, unlocked by a gesture; mixer changes never restart physics. */
 export class CabinetAudio {
   private context?: AudioContext;
   private fx?: GainNode;
+  private fxInput?: GainNode;
+  private rollSource?: AudioBufferSourceNode;
+  private buffers = new Map<RecordedClip, AudioBuffer>();
+  private recordings: Promise<Array<readonly [RecordedClip, ArrayBuffer]>>;
+  private samplesReady?: Promise<void>;
+  private previewSources = new Set<AudioBufferSourceNode>();
+  private variant = 0;
   private musicGain?: GainNode;
   private airGain?: GainNode;
   private rollGain?: GainNode;
@@ -19,7 +32,24 @@ export class CabinetAudio {
   private lastCue = new Map<Cue, number>();
   private previewTimer?: ReturnType<typeof setTimeout>;
   private previewing = false;
-  constructor(private settings: GameSettings) {}
+  constructor(private settings: GameSettings) {
+    // Fetch small local recordings while the player reads the opening screen.
+    this.recordings = Promise.all(
+      RECORDED_CLIPS.map(async (name) => {
+        try {
+          const response = await fetch(`./audio/mechanics/${name}.wav`);
+          if (!response.ok) return null;
+          return [name, await response.arrayBuffer()] as const;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((items) =>
+      items.filter(
+        (item): item is readonly [RecordedClip, ArrayBuffer] => item !== null,
+      ),
+    );
+  }
   unlock() {
     if (this.disposed) return;
     try {
@@ -48,10 +78,54 @@ export class CabinetAudio {
     compressor.release.value = 0.15;
     compressor.connect(c.destination);
     this.fx = c.createGain();
+    this.fx.gain.value = 0;
     this.fx.connect(compressor);
+    this.fxInput = c.createGain();
+    const distance = c.createBiquadFilter();
+    distance.type = "lowpass";
+    distance.frequency.value = 3400;
+    distance.Q.value = 0.5;
+    this.fxInput.connect(distance);
+    const dry = c.createGain(),
+      wet = c.createGain(),
+      preDelay = c.createDelay(0.1),
+      reverb = c.createConvolver();
+    dry.gain.value = CINEMATIC_MIX.dry;
+    wet.gain.value = CINEMATIC_MIX.wet;
+    preDelay.delayTime.value = CINEMATIC_MIX.preDelay;
+    const impulse = c.createBuffer(
+      2,
+      Math.ceil(c.sampleRate * CINEMATIC_MIX.decay),
+      c.sampleRate,
+    );
+    let seed = 7341;
+    for (let channel = 0; channel < 2; channel++) {
+      const samples = impulse.getChannelData(channel);
+      let softened = 0;
+      for (let i = 0; i < samples.length; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        softened += (seed / 2147483648 - 1 - softened) * 0.18;
+        const seconds = i / c.sampleRate;
+        samples[i] =
+          softened * Math.exp(-seconds * 1.9) * (1 - i / samples.length);
+      }
+    }
+    reverb.buffer = impulse;
+    const damping = c.createBiquadFilter();
+    damping.type = "lowpass";
+    damping.frequency.value = 2200;
+    distance.connect(dry).connect(this.fx);
+    distance
+      .connect(preDelay)
+      .connect(reverb)
+      .connect(damping)
+      .connect(wet)
+      .connect(this.fx);
     this.musicGain = c.createGain();
+    this.musicGain.gain.value = 0;
     this.musicGain.connect(compressor);
     this.airGain = c.createGain();
+    this.airGain.gain.value = 0;
     this.airGain.connect(compressor);
     this.noise = c.createBuffer(1, c.sampleRate * 3, c.sampleRate);
     const data = this.noise.getChannelData(0);
@@ -85,7 +159,7 @@ export class CabinetAudio {
       lfo.start();
       this.sources.push(source, lfo);
     }
-    const roll = c.createBufferSource();
+    const roll = (this.rollSource = c.createBufferSource());
     roll.buffer = this.noise;
     roll.loop = true;
     this.rollFilter = c.createBiquadFilter();
@@ -98,9 +172,31 @@ export class CabinetAudio {
       .connect(this.rollFilter)
       .connect(this.rollGain)
       .connect(this.rollPan)
-      .connect(this.fx);
+      .connect(this.fxInput);
     roll.start();
     this.sources.push(roll);
+    this.samplesReady = this.recordings.then(async (recordings) => {
+      await Promise.all(
+        recordings.map(async ([name, bytes]) => {
+          try {
+            const buffer = await c.decodeAudioData(bytes);
+            if (!this.disposed) this.buffers.set(name, buffer);
+          } catch {
+            /* A soft synthesized fallback remains available. */
+          }
+        }),
+      );
+      if (this.disposed || !this.buffers.has("rolling")) return;
+      const recordedRoll = c.createBufferSource();
+      recordedRoll.buffer = this.buffers.get("rolling")!;
+      recordedRoll.loop = true;
+      recordedRoll.connect(this.rollFilter!);
+      recordedRoll.start();
+      this.rollSource?.stop();
+      this.rollSource?.disconnect();
+      this.rollSource = recordedRoll;
+      this.sources.push(recordedRoll);
+    });
     this.apply(this.settings);
   }
   apply(settings: GameSettings) {
@@ -109,22 +205,36 @@ export class CabinetAudio {
     const t = this.context.currentTime,
       mute = settings.muted ? 0 : 1;
     this.fx?.gain.setTargetAtTime(
-      settings.effectsVolume * 0.92 * mute,
+      settings.effectsVolume * CINEMATIC_MIX.effects * mute,
       t,
       0.035,
     );
     this.musicGain?.gain.setTargetAtTime(
-      settings.musicVolume * 0.55 * mute,
+      settings.musicVolume * CINEMATIC_MIX.music * mute,
       t,
       0.3,
     );
-    this.airGain?.gain.setTargetAtTime(settings.ambienceVolume * mute, t, 0.4);
+    this.airGain?.gain.setTargetAtTime(
+      settings.ambienceVolume * CINEMATIC_MIX.air * mute,
+      t,
+      0.4,
+    );
     if (this.music && (settings.musicVolume === 0 || settings.muted))
       this.music.pause();
     else if (this.enabled && this.music)
       void this.music.play().catch(() => undefined);
   }
   active(active: boolean) {
+    if (this.previewing) {
+      for (const source of this.previewSources) {
+        try {
+          source.stop();
+        } catch {
+          /* Already ended. */
+        }
+      }
+      this.previewSources.clear();
+    }
     clearTimeout(this.previewTimer);
     this.previewing = false;
     this.enabled = active;
@@ -142,9 +252,12 @@ export class CabinetAudio {
     this.previewing = true;
     this.unlock();
     if (!this.context) return;
-    this.play({ cue: "flipper", x: 170, strength: 1 });
-    this.tone(415, 0.11, 0.2, "sine", 205, 0.35, 0.25);
-    this.tone(130, 0.07, 0.22, "triangle", 60, -0.35, 0.55);
+    void this.samplesReady?.then(() => {
+      if (!this.previewing) return;
+      this.play({ cue: "flipper", x: 170, strength: 1 });
+      this.sample("bumper-a", 0.7, 1, 0.3, 0.6);
+      this.sample("plunger", 0.6, 0.96, -0.25, 1.2);
+    });
     this.previewTimer = setTimeout(() => {
       if (this.previewing) this.active(false);
     }, 6500);
@@ -153,7 +266,7 @@ export class CabinetAudio {
     if (!this.context || !this.rollGain) return;
     const t = this.context.currentTime;
     this.rollGain.gain.setTargetAtTime(
-      Math.min(metal ? 0.16 : 0.095, speed / 8000),
+      Math.min(metal ? 0.032 : 0.018, speed / 40000),
       t,
       0.06,
     );
@@ -179,16 +292,7 @@ export class CabinetAudio {
     if (t - (this.lastCue.get(cue) ?? -1) < interval || this.voices > 14)
       return;
     this.lastCue.set(cue, t);
-    // Briefly make room for the physical action without turning the score off.
-    if (
-      ["flipper", "bumper", "sling", "launch", "drain"].includes(cue) &&
-      this.musicGain
-    ) {
-      const volume = this.settings.musicVolume * 0.55;
-      this.musicGain.gain.cancelScheduledValues(t);
-      this.musicGain.gain.setTargetAtTime(volume * 0.62, t, 0.012);
-      this.musicGain.gain.setTargetAtTime(volume, t + 0.1, 0.17);
-    }
+    // The score stays in the foreground: collisions never duck the music.
     const pan = (x - 300) / 430,
       s = Math.min(1, Math.max(0.1, strength));
     const tone = (
@@ -201,92 +305,135 @@ export class CabinetAudio {
     ) => this.tone(f, d, v * s, w, end, pan, delay);
     const tick = (f: number, d: number, v: number) =>
       this.tick(f, d, v * s, pan);
-    switch (cue) {
-      case "spinner":
-        [0, 0.045, 0.1, 0.18, 0.29].forEach((delay, i) =>
-          tone(1800 - i * 160, 0.025, 0.055, "triangle", 760, delay),
-        );
-        break;
-      case "drop":
-        tick(2000, 0.022, 0.32);
-        tone(190, 0.085, 0.21, "triangle", 65);
-        break;
-      case "scoop":
-        tick(500, 0.16, 0.22);
-        tone(85, 0.5, 0.14, "triangle", 40);
-        tone(280, 0.06, 0.12, "triangle", 120, 0.6);
-        break;
-      case "flipper":
-        tone(165, 0.064, 0.3, "triangle", 62);
-        tick(1850, 0.019, 0.31);
-        break;
-      case "release":
-        tick(1350, 0.033, 0.22);
-        break;
-      case "rail":
-        tick(2200, 0.029, 0.24);
-        tone(970, 0.038, 0.08, "sine", 510);
-        break;
-      case "launch":
-        tone(150, 0.18, 0.24, "triangle", 42);
-        tick(650, 0.13, 0.18);
-        break;
-      case "bumper":
-        tone(300 + x * 0.3, 0.095, 0.24, "sine", 180);
-        tick(1800, 0.038, 0.28);
-        break;
-      case "sling":
-        tone(170, 0.065, 0.2, "triangle", 70);
-        tick(1550, 0.043, 0.25);
-        break;
-      case "shot":
-        tone(440, 0.23, 0.1, "sine", 420);
-        tone(660, 0.28, 0.045, "sine", 640, 0.06);
-        break;
-      case "ramp":
-        tick(2600, 0.42, 0.15);
-        tone(293.66, 0.3, 0.05, "sine", 440);
-        break;
-      case "save":
-        tone(330, 0.2, 0.08);
-        tone(494, 0.3, 0.08, "sine", 440, 0.15);
-        break;
-      case "drain":
-        tone(140, 0.32, 0.13, "triangle", 45);
-        tick(420, 0.1, 0.08);
-        break;
-      case "mode":
-        [146.83, 220, 293.66].forEach((f, i) =>
-          tone(f, 0.6, 0.06, "sine", f, i * 0.13),
-        );
-        break;
-      case "complete":
-        [293.66, 440, 587.33].forEach((f, i) =>
-          tone(f, 0.65, 0.085, "sine", f, i * 0.12),
-        );
-        break;
-      case "multiball":
-        tone(55, 1.4, 0.18, "triangle", 37);
-        tick(160, 0.9, 0.3);
-        tone(110, 1.6, 0.06, "sine", 82, 0.2);
-        break;
-      case "tilt":
-        tone(72, 0.45, 0.15, "triangle", 55);
-        tone(68, 0.45, 0.1, "triangle", 48, 0.4);
-        break;
-      case "nudge":
-        tick(140, 0.17, 0.23);
-        break;
-      case "ui":
-        tone(390, 0.06, 0.055, "sine", 310);
-        break;
-    }
+    const recorded = recordedCue(cue, this.variant++);
+    const usedRecording =
+      recorded &&
+      this.sample(recorded.clip, recorded.gain * s, recorded.rate, pan);
+    if (!usedRecording)
+      switch (cue) {
+        case "spinner":
+          [0, 0.045, 0.1, 0.18, 0.29].forEach((delay, i) =>
+            tone(1800 - i * 160, 0.025, 0.055, "triangle", 760, delay),
+          );
+          break;
+        case "drop":
+          tick(2000, 0.022, 0.32);
+          tone(190, 0.085, 0.21, "triangle", 65);
+          break;
+        case "scoop":
+          tick(500, 0.16, 0.22);
+          tone(85, 0.5, 0.14, "triangle", 40);
+          tone(280, 0.06, 0.12, "triangle", 120, 0.6);
+          break;
+        case "flipper":
+          tone(165, 0.064, 0.3, "triangle", 62);
+          tick(1850, 0.019, 0.31);
+          break;
+        case "release":
+          tick(1350, 0.033, 0.22);
+          break;
+        case "rail":
+          tick(2200, 0.029, 0.24);
+          tone(970, 0.038, 0.08, "sine", 510);
+          break;
+        case "launch":
+          tone(150, 0.18, 0.24, "triangle", 42);
+          tick(650, 0.13, 0.18);
+          break;
+        case "bumper":
+          tone(300 + x * 0.3, 0.095, 0.24, "sine", 180);
+          tick(1800, 0.038, 0.28);
+          break;
+        case "sling":
+          tone(170, 0.065, 0.2, "triangle", 70);
+          tick(1550, 0.043, 0.25);
+          break;
+        case "shot":
+          tone(440, 0.23, 0.1, "sine", 420);
+          tone(660, 0.28, 0.045, "sine", 640, 0.06);
+          break;
+        case "ramp":
+          tick(2600, 0.42, 0.15);
+          tone(293.66, 0.3, 0.05, "sine", 440);
+          break;
+        case "save":
+          tone(330, 0.2, 0.08);
+          tone(494, 0.3, 0.08, "sine", 440, 0.15);
+          break;
+        case "drain":
+          tone(140, 0.32, 0.13, "triangle", 45);
+          tick(420, 0.1, 0.08);
+          break;
+        case "mode":
+          [146.83, 220, 293.66].forEach((f, i) =>
+            tone(f, 0.6, 0.06, "sine", f, i * 0.13),
+          );
+          break;
+        case "complete":
+          [293.66, 440, 587.33].forEach((f, i) =>
+            tone(f, 0.65, 0.085, "sine", f, i * 0.12),
+          );
+          break;
+        case "multiball":
+          tone(55, 1.4, 0.18, "triangle", 37);
+          tick(160, 0.9, 0.3);
+          tone(110, 1.6, 0.06, "sine", 82, 0.2);
+          break;
+        case "tilt":
+          tone(72, 0.45, 0.15, "triangle", 55);
+          tone(68, 0.45, 0.1, "triangle", 48, 0.4);
+          break;
+        case "nudge":
+          tick(140, 0.17, 0.23);
+          break;
+        case "ui":
+          tone(390, 0.06, 0.055, "sine", 310);
+          break;
+      }
     if (
       this.settings.haptics &&
       ["bumper", "sling", "multiball"].includes(cue) &&
       "vibrate" in navigator
     )
       navigator.vibrate(cue === "multiball" ? 30 : 7);
+  }
+  private sample(
+    name: RecordedClip,
+    volume: number,
+    rate: number,
+    pan: number,
+    delay = 0,
+  ) {
+    const buffer = this.buffers.get(name),
+      c = this.context;
+    if (
+      !buffer ||
+      !c ||
+      !this.fxInput ||
+      this.disposed ||
+      !this.enabled ||
+      this.voices >= 16
+    )
+      return false;
+    const source = c.createBufferSource(),
+      gain = c.createGain(),
+      stereo = c.createStereoPanner();
+    source.buffer = buffer;
+    source.playbackRate.value = rate * (0.985 + Math.random() * 0.03);
+    gain.gain.value = volume;
+    stereo.pan.value = Math.max(-0.65, Math.min(0.65, pan));
+    source.connect(gain).connect(stereo).connect(this.fxInput);
+    this.voices++;
+    if (this.previewing) this.previewSources.add(source);
+    source.onended = () => {
+      source.disconnect();
+      gain.disconnect();
+      stereo.disconnect();
+      this.previewSources.delete(source);
+      this.voices--;
+    };
+    source.start(c.currentTime + delay);
+    return true;
   }
   private tone(
     f: number,
@@ -309,7 +456,7 @@ export class CabinetAudio {
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(v, t + 0.004);
     g.gain.exponentialRampToValueAtTime(0.0001, t + d);
-    o.connect(g).connect(p).connect(this.fx!);
+    o.connect(g).connect(p).connect(this.fxInput!);
     o.start(t);
     o.stop(t + d + 0.01);
     this.voices++;
@@ -334,7 +481,7 @@ export class CabinetAudio {
     p.pan.value = pan;
     g.gain.setValueAtTime(v, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + d);
-    o.connect(filter).connect(g).connect(p).connect(this.fx!);
+    o.connect(filter).connect(g).connect(p).connect(this.fxInput!);
     o.start(t, Math.random());
     o.stop(t + d);
     this.voices++;

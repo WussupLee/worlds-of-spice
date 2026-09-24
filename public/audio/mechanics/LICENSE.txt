@@ -1,0 +1,35 @@
+REAL PINBALL MECHANICAL RECORDINGS
+Source pack: “1977 Bronco pinball” by schafferdavid, published December 4, 2018.
+https://freesound.org/people/schafferdavid/packs/25508/
+License: Creative Commons Zero 1.0 Universal (CC0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Recording: 1977 Gottlieb Bronco machine; two Neumann KM 184 microphones,
+XY stereo, Scarlett 18i20 preamp. These are mechanical field recordings,
+not extracted commercial game ROM audio or synthesized substitutes.
+
+Sources and derived files:
+450270 pinball-flipper hits.wav -> flipper-a.wav, flipper-b.wav, release.wav
+https://freesound.org/people/schafferdavid/sounds/450270/
+450265 pinball-bumper hits.wav -> bumper-a.wav, bumper-b.wav
+https://freesound.org/people/schafferdavid/sounds/450265/
+450267 pinball-ball being launched by plunger.wav -> plunger.wav, rolling.wav
+https://freesound.org/people/schafferdavid/sounds/450267/
+450266 pinball-ball falling under flippers.wav -> drain.wav
+https://freesound.org/people/schafferdavid/sounds/450266/
+450268 pinball-backbox scoring mechanism in action.wav -> relay.wav
+https://freesound.org/people/schafferdavid/sounds/450268/
+
+Retrieved September 24, 2026 from the publicly served HQ MP3 previews linked
+in each source page. Original 96 kHz WAV downloads require an account; these
+assets are edited preview derivatives, not claimed to be the original WAVs.
+Public preview pattern: https://cdn.freesound.org/previews/450/{id}_98337-hq.mp3
+
+Edits: selected short isolated events; mono 44.1 kHz PCM; 90 Hz high-pass,
+6.5 kHz low-pass, short edge fades, peak normalized to 0.72. Source times and
+the reproducible processing pipeline are in scripts/prepare-mechanics.mjs.
+Runtime changes: quiet gain, small pitch variation, distance filtering,
+stereo positioning and a shared original 3.4-second convolution reverb.
+
+CC0 allows commercial use, editing and redistribution without attribution.
+Credit is nevertheless included here and in the game's Credits.

@@ -21,10 +21,32 @@ export function parseSettings(raw: string | null): GameSettings {
       "ballTrail",
     ] as const)
       if (typeof p[key] === "boolean") result[key] = p[key];
+    if (["auto", "sharp", "battery"].includes(p.renderQuality))
+      result.renderQuality = p.renderQuality;
     return result;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+/** Apply the new sound mix once while preserving mute and accessibility choices. */
+export function restoreSettings(
+  current: string | null,
+  previous: string | null,
+  reduceMotion: boolean,
+): GameSettings {
+  if (current) return parseSettings(current);
+  const result = { ...DEFAULT_SETTINGS };
+  if (previous) {
+    const old = parseSettings(previous);
+    for (const key of [
+      "muted",
+      "haptics",
+      "reducedMotion",
+      "ballTrail",
+    ] as const)
+      result[key] = old[key];
+  } else result.reducedMotion = reduceMotion;
+  return result;
 }
 export function parseScores(raw: string | null): HighScoreEntry[] {
   try {

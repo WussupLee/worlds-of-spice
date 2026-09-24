@@ -9,15 +9,17 @@ export interface GameSettings {
   haptics: boolean;
   reducedMotion: boolean;
   ballTrail: boolean;
+  renderQuality: "auto" | "sharp" | "battery";
 }
 export const DEFAULT_SETTINGS: GameSettings = {
-  effectsVolume: 0.82,
-  musicVolume: 0.34,
-  ambienceVolume: 0.24,
+  effectsVolume: 0.24,
+  musicVolume: 0.72,
+  ambienceVolume: 0.03,
   muted: false,
   haptics: true,
   reducedMotion: false,
   ballTrail: true,
+  renderQuality: "auto",
 };
 export interface GameSnapshot {
   phase: GamePhase;

@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { RenderResolution, type RenderQuality } from "./render-quality";
 import {
   BUMPERS,
   RAILS,
@@ -45,7 +47,13 @@ export class TableRenderer {
   private steel = standard("#f4f8fa", 1, 0.08);
   private black = standard("#172025", 0.55, 0.38);
   private rubber = standard("#262d2e", 0.05, 0.8);
-  private bone = standard("#f5e4bb", 0.3, 0.29);
+  private bone = new THREE.MeshPhysicalMaterial({
+    color: "#f5e4bb",
+    roughness: 0.27,
+    metalness: 0,
+    clearcoat: 0.65,
+    clearcoatRoughness: 0.18,
+  });
   private brass = standard("#b49059", 0.72, 0.32);
   private orange = standard("#b44420", 0.3, 0.42);
   private blue = standard("#23576a", 0.5, 0.4);
@@ -73,8 +81,8 @@ export class TableRenderer {
     t: number;
   }> = [];
   private keyLight: THREE.DirectionalLight;
-  private slowFrames = 0;
-  private qualityLevel = 0;
+  private resolution: RenderResolution;
+  private renderQuality: RenderQuality = "auto";
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -83,22 +91,21 @@ export class TableRenderer {
       powerPreference: "high-performance",
     });
     this.renderer.setClearColor(0x070b10, 0);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.65));
     const gl = this.renderer.getContext();
     const info = gl.getExtension("WEBGL_debug_renderer_info");
     const device = info
       ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL))
       : "";
-    if (/swiftshader|llvmpipe|software/i.test(device)) {
-      this.renderer.setPixelRatio(0.6);
-      this.qualityLevel = 2;
-      canvas.dataset.quality = "software-balanced";
-    }
+    this.resolution = new RenderResolution(
+      /swiftshader|llvmpipe|software/i.test(device),
+    );
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.02;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.BasicShadowMap;
+    this.renderer.shadowMap.type = this.resolution.software
+      ? THREE.BasicShadowMap
+      : THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.renderer.shadowMap.needsUpdate = true;
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -109,8 +116,8 @@ export class TableRenderer {
     room.dispose();
     pmrem.dispose();
     this.scene.add(this.fixed);
-    this.scene.add(new THREE.HemisphereLight(0xa6c4e0, 0x81502d, 1.7));
-    this.keyLight = new THREE.DirectionalLight(0xffe4b5, 2.6);
+    this.scene.add(new THREE.HemisphereLight(0xa6c4e0, 0x81502d, 1.35));
+    this.keyLight = new THREE.DirectionalLight(0xffe4b5, 2.35);
     this.keyLight.position.set(-340, 700, 120);
     this.keyLight.castShadow = true;
     Object.assign(this.keyLight.shadow.camera, {
@@ -121,11 +128,13 @@ export class TableRenderer {
       near: 10,
       far: 1600,
     });
-    this.keyLight.shadow.mapSize.set(1024, 1024);
+    this.keyLight.shadow.mapSize.setScalar(
+      this.resolution.software ? 1024 : 2048,
+    );
     this.keyLight.shadow.bias = -0.0003;
     this.keyLight.shadow.normalBias = 0.5;
     this.scene.add(this.keyLight);
-    const rim = new THREE.DirectionalLight(0x7ba7e8, 2.2);
+    const rim = new THREE.DirectionalLight(0x7ba7e8, 1.9);
     rim.position.set(420, 350, -450);
     this.scene.add(rim);
     this.buildCabinet();
@@ -170,7 +179,13 @@ export class TableRenderer {
     parent = this.fixed,
   ) {
     return this.mesh(
-      new THREE.BoxGeometry(w, tall, depth),
+      new RoundedBoxGeometry(
+        w,
+        tall,
+        depth,
+        2,
+        Math.min(1.8, w / 8, tall / 4, depth / 8),
+      ),
       mat,
       V(x, y, h),
       parent,
@@ -204,7 +219,7 @@ export class TableRenderer {
         new THREE.CatmullRomCurve3(points),
         segments,
         radius,
-        6,
+        8,
         false,
       ),
       mat,
@@ -240,19 +255,20 @@ export class TableRenderer {
     y: number,
     w: number,
     h: number,
-    color = "#ebd6ac",
+    color = "#18343d",
   ) {
     const c = document.createElement("canvas");
-    c.width = 512;
-    c.height = 64;
+    c.width = 1024;
+    c.height = 128;
     const ctx = c.getContext("2d")!;
-    ctx.font = "600 36px 'Arial Narrow', Arial, sans-serif";
+    ctx.font = "600 72px 'Arial Narrow', Arial, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = color;
-    ctx.fillText(text, 256, 33, 498);
+    ctx.fillText(text, 512, 66, 996);
     const texture = new THREE.CanvasTexture(c);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     this.textures.push(texture);
     const mat = new THREE.MeshBasicMaterial({
       map: texture,
@@ -264,13 +280,22 @@ export class TableRenderer {
     m.castShadow = false;
   }
   private buildCabinet() {
-    const art = new THREE.TextureLoader().load("./assets/playfield.png", () => {
-      if (!this.disposed) art.needsUpdate = true;
-    });
+    const art = new THREE.TextureLoader().load(
+      "./assets/playfield-crisp.png",
+      () => {
+        if (!this.disposed) art.needsUpdate = true;
+      },
+    );
     art.colorSpace = THREE.SRGBColorSpace;
-    art.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    art.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
     this.textures.push(art);
-    const print = standard("#f1deca", 0.1, 0.51);
+    const print = new THREE.MeshPhysicalMaterial({
+      color: "#ffffff",
+      metalness: 0,
+      roughness: 0.48,
+      clearcoat: 0.3,
+      clearcoatRoughness: 0.28,
+    });
     print.map = art;
     this.box(300, 500, -16, 616, 1016, 28, this.black);
     const deck = this.mesh(
@@ -291,7 +316,7 @@ export class TableRenderer {
     this.box(300, 980, 4, 580, 35, 29, this.black);
     this.box(300, 968, 23, 603, 12, 15, this.chrome);
     this.box(299, 920, 0.6, 365, 78, 1, this.black);
-    this.decal("W O R L D S   O F   S P I C E", 297, 914, 323, 26);
+    this.decal("W O R L D S   O F   S P I C E", 297, 914, 323, 26, "#ebd6ac");
     this.decal("D E S E R T   P I N B A L L", 297, 937, 184, 11, "#9fa6a2");
     this.decal("P R E S C I E N C E", 298, 579, 182, 22, "#efe0b0");
     this.decal("HARVEST", 155, 509, 83, 16);
@@ -846,6 +871,16 @@ export class TableRenderer {
   resize() {
     const rect = this.canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
+    const ratio = this.resolution.ratio(
+      rect.width,
+      rect.height,
+      window.devicePixelRatio,
+      this.renderQuality,
+    );
+    if (Math.abs(this.renderer.getPixelRatio() - ratio) > 0.005)
+      this.renderer.setPixelRatio(ratio);
+    this.canvas.dataset.quality = `${this.renderQuality}${this.resolution.software ? "-software" : ""}`;
+    this.canvas.dataset.pixelRatio = ratio.toFixed(2);
     this.renderer.setSize(rect.width, rect.height, false);
     this.camera.aspect = rect.width / rect.height;
     // Cabinet view with enough tilt to reveal raised ramps without hiding the fan.
@@ -876,18 +911,13 @@ export class TableRenderer {
     const frameTime = now - this.last || 0.016;
     const dt = Math.min(0.05, frameTime);
     this.last = now;
-    // A sustained slow renderer lowers resolution, including very slow software GPUs.
-    // The fixed-step simulation clock remains independent from this quality choice.
-    if (this.qualityLevel < 3 && frameTime > 0.045 && frameTime < 5)
-      this.slowFrames++;
-    else this.slowFrames = Math.max(0, this.slowFrames - 0.2);
-    if (this.slowFrames > 12 && this.qualityLevel < 3) {
-      this.qualityLevel++;
-      this.slowFrames = 0;
-      this.renderer.setPixelRatio([1.65, 0.85, 0.6, 0.4][this.qualityLevel]);
+    if (this.renderQuality !== settings.renderQuality) {
+      this.renderQuality = settings.renderQuality;
+      this.resolution.reset();
       this.resize();
-      this.canvas.dataset.quality = `balanced-${this.qualityLevel}`;
     }
+    if (this.resolution.observe(frameTime, now, this.renderQuality))
+      this.resize();
     for (const [i, f] of [e.left, e.right].entries())
       this.flippers[i].rotation.y = -f.angle;
     this.bumpers.forEach((g, i) => {
