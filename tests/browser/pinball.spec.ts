@@ -381,7 +381,7 @@ test("a full three-ball game ends, records the score, and restarts cleanly", asy
     isMobile || browserName !== "chromium",
     "One full production lifecycle in Chromium; physics stress cases run separately.",
   );
-  test.setTimeout(120_000);
+  test.setTimeout(process.env.CI ? 180_000 : 120_000);
   await start(page);
   await page.clock.install();
   let ended = false;

@@ -74,7 +74,7 @@ export class TableRenderer {
   }> = [];
   private keyLight: THREE.DirectionalLight;
   private slowFrames = 0;
-  private qualityReduced = false;
+  private qualityLevel = 0;
   constructor(private canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -84,6 +84,16 @@ export class TableRenderer {
     });
     this.renderer.setClearColor(0x070b10, 0);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.65));
+    const gl = this.renderer.getContext();
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const device = info
+      ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL))
+      : "";
+    if (/swiftshader|llvmpipe|software/i.test(device)) {
+      this.renderer.setPixelRatio(0.6);
+      this.qualityLevel = 2;
+      canvas.dataset.quality = "software-balanced";
+    }
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.02;
@@ -866,15 +876,17 @@ export class TableRenderer {
     const frameTime = now - this.last || 0.016;
     const dt = Math.min(0.05, frameTime);
     this.last = now;
-    // Sustained slow hardware gets a lower raster resolution, not slower physics.
-    if (!this.qualityReduced && frameTime > 0.033 && frameTime < 0.5)
+    // A sustained slow renderer lowers resolution, including very slow software GPUs.
+    // The fixed-step simulation clock remains independent from this quality choice.
+    if (this.qualityLevel < 3 && frameTime > 0.045 && frameTime < 5)
       this.slowFrames++;
     else this.slowFrames = Math.max(0, this.slowFrames - 0.2);
-    if (this.slowFrames > 45 && !this.qualityReduced) {
-      this.qualityReduced = true;
-      this.renderer.setPixelRatio(Math.min(1, window.devicePixelRatio || 1));
+    if (this.slowFrames > 12 && this.qualityLevel < 3) {
+      this.qualityLevel++;
+      this.slowFrames = 0;
+      this.renderer.setPixelRatio([1.65, 0.85, 0.6, 0.4][this.qualityLevel]);
       this.resize();
-      this.canvas.dataset.quality = "balanced";
+      this.canvas.dataset.quality = `balanced-${this.qualityLevel}`;
     }
     for (const [i, f] of [e.left, e.right].entries())
       this.flippers[i].rotation.y = -f.angle;

@@ -19,6 +19,17 @@ function ballAt(x: number, y: number, vy = -400) {
   return { e, b };
 }
 describe("physical elevation and mechanism contracts", () => {
+  it("low rendering frame rates do not slow the simulation clock", () => {
+    const slow = ballAt(300, 560, 0).e,
+      fast = ballAt(300, 560, 0).e;
+    for (let i = 0; i < 10; i++) slow.advance(0.1);
+    for (let i = 0; i < 60; i++) fast.advance(1 / 60);
+    expect(slow.clock).toBeCloseTo(1, 2);
+    expect(slow.clock).toBeCloseTo(fast.clock, 2);
+    expect(slow.score).toBe(fast.score);
+    expect(slow.balls[0].x).toBeCloseTo(fast.balls[0].x, 1);
+    expect(slow.balls[0].y).toBeCloseTo(fast.balls[0].y, 1);
+  });
   it("both wireforms start and end at the playfield, with a continuous raised bridge", () => {
     expect(rampHeight(0)).toBe(0);
     expect(rampHeight(1)).toBe(0);

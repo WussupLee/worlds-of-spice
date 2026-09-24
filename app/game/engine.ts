@@ -374,7 +374,9 @@ export class PinballEngine {
   }
   advance(delta: number) {
     if (this.phase !== "playing") return;
-    this.accumulator += Math.min(0.06, Math.max(0, delta));
+    // Preserve real time down to 4 rendered frames/sec; every collision still runs
+    // at 240 Hz. Blur/pause clears the accumulator, and long stalls remain bounded.
+    this.accumulator += Math.min(0.25, Math.max(0, delta));
     while (this.accumulator >= STEP) {
       this.tick(STEP);
       this.accumulator -= STEP;

@@ -2,19 +2,21 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/browser",
-  timeout: 40_000,
-  expect: { timeout: 8_000 },
+  timeout: process.env.CI ? 70_000 : 40_000,
+  expect: { timeout: process.env.CI ? 15_000 : 8_000 },
   fullyParallel: true,
-  workers: 2,
+  workers: process.env.CI ? 1 : 2,
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     launchOptions:
-      process.platform === "win32"
+      process.platform === "win32" && !process.env.PINBALL_SOFTWARE_RENDERING
         ? { args: ["--enable-gpu", "--use-angle=d3d11"] }
         : {},
     baseURL: "http://127.0.0.1:4173/worlds-of-spice/",
-    trace: "retain-on-failure",
+    // Continuous screencasting forces WebGL readbacks on CPU-only CI runners.
+    // Keep action/DOM traces; explicit verification/failure screenshots remain.
+    trace: { mode: "retain-on-failure", screenshots: false, snapshots: true },
     screenshot: "only-on-failure",
   },
   webServer: {
