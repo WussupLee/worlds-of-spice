@@ -4,6 +4,7 @@
 
 - `pnpm test`: deterministic engine/rules/storage tests. These cover launch strength, skill-shot qualification, both rising flippers, held energy limits, left/right cradle and release, rail tunneling, pause clocks, one-time ramp capture and return, stand-up bank awards, save deadlines, three-ball termination, latched tilt, Oracle progression, combo expiry/cap, multiball completion and finale qualification.
 - Ten seeded three-minute engine simulations use varied flipper input. Each must end normally with three balls consumed, finite coordinates/velocities and no escaped living balls. This caught trapping around sling vertices and return-lane caps; those geometries were corrected.
+- A contact-timing sweep from both flippers verifies that all five major shots are physically reachable as the first major shot. Rules tests alone would not prove that the layout actually lets players reach its objectives.
 - `pnpm lint` and `pnpm exec tsc --noEmit` check source consistency.
 - `pnpm build:pages` verifies a fresh static export and every linked build asset before creating a content-versioned offline cache.
 - `pnpm test:browser` runs against the production artifact mounted at its real GitHub Pages path, not just the development server.
